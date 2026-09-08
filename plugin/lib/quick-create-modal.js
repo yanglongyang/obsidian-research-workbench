@@ -7,7 +7,7 @@ class QuickCreateModal extends Modal {
   }
 
   onOpen() {
-    this.modalEl.addClass('phdcc-quick-create-modal');
+    this.modalEl.addClass('phdcc-task-modal', 'phdcc-quick-create-modal');
     this.contentEl.createEl('h2', { text: '快速新增' });
     this.contentEl.createDiv({ cls: 'phdcc-modal-subtitle', text: '选择要创建的科研对象' });
     const options = [

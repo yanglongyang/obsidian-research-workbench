@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 — UI Closure
+
+### Fixed
+
+- Quick Create 命令在工作台关闭时会先激活视图再打开新增菜单。
+- 修正 NMR 行的三列布局和窄窗口换行。
+- 未知核种（包括 19F、31P）统一显示 warning badge。
+- Sidebar 导航改为可 Tab/Enter/Space 操作的按钮，并标记当前页面。
+- Quick Create Modal 继承科研工作台主题变量。
+- 切换页面时清空当前页搜索条件。
+
 ## 0.3.0 — UI Refinement
 
 ### Added

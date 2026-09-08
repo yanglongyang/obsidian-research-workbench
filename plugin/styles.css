@@ -103,6 +103,7 @@
 
 .phdcc-view .phdcc-nav-item {
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 9px;
   min-height: 36px;
@@ -111,6 +112,10 @@
   border-radius: 8px;
   cursor: pointer;
   user-select: none;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
 }
 
 .phdcc-view .phdcc-nav-item:hover {
@@ -471,6 +476,8 @@
   border-bottom: 1px solid var(--phdcc-border);
 }
 
+.phdcc-view .phdcc-nmr-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+
 .phdcc-view .phdcc-experiment-row:last-child,
 .phdcc-view .phdcc-nmr-row:last-child { border-bottom: 0; }
 .phdcc-view .phdcc-experiment-row.is-blocked { border-left: 3px solid var(--phdcc-danger); padding-left: 10px; }
@@ -785,6 +792,8 @@
   .phdcc-view .phdcc-task-row { grid-template-columns: auto minmax(0, 1fr); min-height: 56px; padding: 10px 7px; }
   .phdcc-view .phdcc-experiment-row,
   .phdcc-view .phdcc-nmr-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .phdcc-view .phdcc-nmr-row { grid-template-columns: auto minmax(0, 1fr); }
+  .phdcc-view .phdcc-nmr-open { grid-column: 2; justify-self: start; }
   .phdcc-view .phdcc-experiment-side { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
   .phdcc-view .phdcc-db-filters { align-items: stretch; }
   .phdcc-view .phdcc-filter-select { flex: 1 1 150px; }

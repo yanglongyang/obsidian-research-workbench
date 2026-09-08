@@ -2,6 +2,7 @@ const { Plugin } = require('obsidian');
 const { VIEW_TYPE, WorkbenchView } = require('./lib/view');
 const { mergeSettings, ResearchWorkbenchSettingTab } = require('./lib/settings');
 const { affectsManagedPath } = require('./lib/database');
+const { openQuickCreateCommand } = require('./lib/quick-create-command');
 
 module.exports = class PhDCommandCenterPlugin extends Plugin {
   async onload() {
@@ -23,11 +24,7 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
     this.addCommand({
       id: 'quick-create',
       name: '科研工作台：快速新增',
-      callback: () => {
-        const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
-        if (leaf?.view instanceof WorkbenchView) leaf.view.openQuickCreate();
-        else void this.activateView();
-      }
+      callback: () => openQuickCreateCommand(this.app, VIEW_TYPE, WorkbenchView, () => this.activateView())
     });
 
     this.addSettingTab(new ResearchWorkbenchSettingTab(this.app, this));

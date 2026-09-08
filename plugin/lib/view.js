@@ -78,7 +78,7 @@ function formatRelativeDate(value, today = localDate()) {
 
 function badgeTone(value, kind = 'status') {
   if (kind === 'priority') return { high: 'danger', medium: 'warning', low: 'neutral' }[value] || 'neutral';
-  if (kind === 'nmr') return value === 'unknown' || value === 'missing' ? 'warning' : 'info';
+  if (kind === 'nmr') return value === '1H' || value === '13C' ? 'info' : 'warning';
   return { planning: 'neutral', doing: 'info', complete: 'success', blocked: 'danger', todo: 'neutral', done: 'success', deferred: 'warning' }[value] || 'neutral';
 }
 
@@ -178,7 +178,10 @@ class WorkbenchView extends ItemView {
       const group = sidebar.createDiv({ cls: 'phdcc-nav-group' });
       group.createDiv({ cls: 'phdcc-nav-label', text: groupName });
       for (const [id, label, icon] of items) {
-        const item = group.createDiv({ cls: `phdcc-nav-item${id === this.activeSection ? ' is-active' : ''}` });
+        const item = group.createEl('button', {
+          cls: `phdcc-nav-item${id === this.activeSection ? ' is-active' : ''}`,
+          attr: { type: 'button', 'aria-current': id === this.activeSection ? 'page' : 'false', 'aria-label': label }
+        });
         const iconEl = item.createSpan({ cls: 'phdcc-nav-icon' });
         try { setIcon(iconEl, icon); } catch (error) { iconEl.setText('•'); }
         item.createSpan({ cls: 'phdcc-nav-text', text: label });
@@ -186,6 +189,7 @@ class WorkbenchView extends ItemView {
         if (id === 'nmr-inbox' && this.nmrScans.length) item.createSpan({ cls: 'phdcc-nav-count', text: String(this.nmrScans.length) });
         item.addEventListener('click', () => {
           this.activeSection = id;
+          this.searchQuery = '';
           this.saveUiState();
           if (id === 'today') this.selectedDate = localDate();
           void this.refresh();

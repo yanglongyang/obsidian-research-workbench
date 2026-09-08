@@ -22,6 +22,7 @@ const data = require('../plugin/lib/data');
 const database = require('../plugin/lib/database');
 const nmr = require('../plugin/lib/nmr');
 const ui = require('../plugin/lib/view');
+const { openQuickCreateCommand } = require('../plugin/lib/quick-create-command');
 Module._load = originalLoad;
 
 const tests = [];
@@ -117,7 +118,24 @@ test('UI helpers format relative dates and status tones', () => {
   assert.strictEqual(ui.badgeTone('high', 'priority'), 'danger');
   assert.strictEqual(ui.badgeTone('blocked'), 'danger');
   assert.strictEqual(ui.badgeTone('unknown', 'nmr'), 'warning');
+  assert.strictEqual(ui.badgeTone('19F', 'nmr'), 'warning');
   assert.strictEqual(ui.VALID_SECTIONS.has('nmr-inbox'), true);
+});
+
+test('Quick Create command activates a closed view before opening modal', async () => {
+  class FakeView {}
+  let current = [];
+  let activated = 0;
+  let opened = 0;
+  const app = { workspace: { getLeavesOfType: () => current } };
+  const view = new FakeView();
+  await openQuickCreateCommand(app, 'view', FakeView, async () => {
+    activated += 1;
+    view.openQuickCreate = () => { opened += 1; };
+    current = [{ view }];
+  });
+  assert.strictEqual(activated, 1);
+  assert.strictEqual(opened, 1);
 });
 
 test('experiment path sanitizes titles and avoids collisions', () => {

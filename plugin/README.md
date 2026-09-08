@@ -1,6 +1,6 @@
 # 科研工作台（Obsidian 插件）
 
-本地优先的科研信息系统（当前版本 `0.3.0`）。Markdown 是事实来源，`records.json` 是可重建的派生索引，NMR JSONL 是操作审计记录。
+本地优先的科研信息系统（当前版本 `0.3.1`）。Markdown 是事实来源，`records.json` 是可重建的派生索引，NMR JSONL 是操作审计记录。
 
 ## 主要功能
 
