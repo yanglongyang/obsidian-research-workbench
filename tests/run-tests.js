@@ -23,6 +23,13 @@ const database = require('../plugin/lib/database');
 const nmr = require('../plugin/lib/nmr');
 const ui = require('../plugin/lib/view');
 const { openQuickCreateCommand } = require('../plugin/lib/quick-create-command');
+const { isPermanentEntityId } = require('../plugin/lib/entities/identity');
+const { createProject } = require('../plugin/lib/entities/project');
+const { createCompound } = require('../plugin/lib/entities/compound');
+const { createDataAsset } = require('../plugin/lib/entities/data-asset');
+const { PermanentIdMigration } = require('../plugin/lib/migrations/permanent-id');
+const { filterCompoundsByProject, suggestProjectFromCompound } = require('../plugin/lib/experiment-modal');
+const { EntityStore } = require('../plugin/lib/entities/store');
 Module._load = originalLoad;
 
 const tests = [];
@@ -111,6 +118,98 @@ test('v0.4 record types and relationship integrity detect missing, wrong and leg
   assert.ok(result.issues.some((issue) => issue.type === 'self_reference'));
 });
 
+test('permanent entity IDs enforce type prefixes', () => {
+  assert.strictEqual(isPermanentEntityId('PROJ-ABC', 'project'), true);
+  assert.strictEqual(isPermanentEntityId('LEGACY-PROJECT-ABC', 'project'), false);
+  assert.strictEqual(isPermanentEntityId('EXP-ABC', 'project'), false);
+  assert.strictEqual(isPermanentEntityId('', 'project'), false);
+});
+
+test('relation selector helpers filter and suggest without overwriting explicit values', () => {
+  const compounds = [{ id: 'CMP-A', projectId: 'PROJ-A' }, { id: 'CMP-B', projectId: 'PROJ-B' }];
+  assert.deepStrictEqual(filterCompoundsByProject(compounds, 'PROJ-A'), [compounds[0]]);
+  assert.deepStrictEqual(filterCompoundsByProject(compounds, ''), compounds);
+  assert.strictEqual(suggestProjectFromCompound('', compounds[1]), 'PROJ-B');
+  assert.strictEqual(suggestProjectFromCompound('PROJ-A', compounds[1]), 'PROJ-A');
+});
+
+test('schema v3 and duplicate target precedence remain explicit', () => {
+  assert.strictEqual(database.DATABASE_SCHEMA_VERSION, 3);
+  const result = database.validateRelationships([
+    { id: 'CMP-1', type: 'compound', path: 'a.md' },
+    { id: 'CMP-1', type: 'compound', path: 'b.md' },
+    { id: 'DATA-1', type: 'data-asset', path: 'd.md', compoundId: 'CMP-1' }
+  ]);
+  assert.ok(result.issues.some((issue) => issue.type === 'duplicate_record_id'));
+  assert.strictEqual(result.validRelationCount, 0);
+});
+
+test('EntityStore selectors exclude legacy and wrong-prefix records', () => {
+  const files = [{ path: '00-博士工作台/02-课题/a.md', basename: 'a' }, { path: '00-博士工作台/02-课题/b.md', basename: 'b' }];
+  const metadata = new Map([[files[0], { kind: 'project', record_id: 'PROJ-1', title: 'A' }], [files[1], { kind: 'project', record_id: 'LEGACY-PROJECT-X', title: 'B' }]]);
+  const plugin = { app: { vault: { getMarkdownFiles: () => files }, metadataCache: { getFileCache: (file) => ({ frontmatter: metadata.get(file) }) } } };
+  assert.deepStrictEqual(new EntityStore(plugin).listProjects().map((item) => item.id), ['PROJ-1']);
+});
+
+test('relationship conflicts are reported only when both sides are explicit', () => {
+  const consistent = database.validateRelationships([
+    { id: 'PROJ-A', type: 'project', path: 'p.md' },
+    { id: 'CMP-A', type: 'compound', path: 'c.md', projectId: 'PROJ-A' },
+    { id: 'EXP-A', type: 'experiment', path: 'e.md', projectId: 'PROJ-A', compoundId: 'CMP-A' },
+    { id: 'DATA-A', type: 'data-asset', path: 'd.md', projectId: 'PROJ-A', experimentId: 'EXP-A', compoundId: 'CMP-A' }
+  ]);
+  assert.strictEqual(consistent.issues.filter((issue) => issue.type === 'relation_conflict').length, 0);
+  const conflict = database.validateRelationships([
+    { id: 'PROJ-A', type: 'project', path: 'p.md' },
+    { id: 'PROJ-B', type: 'project', path: 'p2.md' },
+    { id: 'CMP-B', type: 'compound', path: 'c.md', projectId: 'PROJ-B' },
+    { id: 'EXP-B', type: 'experiment', path: 'e.md', projectId: 'PROJ-A', compoundId: 'CMP-B' },
+    { id: 'DATA-B', type: 'data-asset', path: 'd.md', projectId: 'PROJ-A', experimentId: 'EXP-B', compoundId: 'CMP-B' }
+  ]);
+  assert.ok(conflict.issues.some((issue) => issue.type === 'relation_conflict'));
+  const missing = database.validateRelationships([{ id: 'DATA-C', type: 'data-asset', path: 'd.md', experimentId: 'EXP-MISSING' }]);
+  assert.strictEqual(missing.issues.filter((issue) => issue.type === 'relation_conflict').length, 0);
+});
+
+function entityApp() {
+  const files = new Map();
+  const vault = {
+    getAbstractFileByPath(value) { return files.get(value) || null; },
+    async createFolder(value) { files.set(value, { path: value }); },
+    async create(value, content) { const file = { path: value, basename: value.split('/').pop().replace(/\.md$/, ''), extension: 'md', content }; files.set(value, file); return file; }
+  };
+  return { files, vault };
+}
+
+test('project, compound and data asset creation writes typed Markdown entities', async () => {
+  const app = entityApp();
+  const id = (prefix) => `${prefix}-TEST`;
+  const project = await createProject(app, { title: 'P/1' }, id);
+  const compound = await createCompound(app, { compoundCode: 'C/1', projectId: 'PROJ-TEST' }, id);
+  const asset = await createDataAsset(app, { title: 'NMR', assetType: 'nmr', dataPath: 'E:/nmr', projectId: 'PROJ-TEST', experimentId: 'EXP-TEST', compoundId: 'CMP-TEST' }, id);
+  assert.match(project.path, /02-课题/); assert.match(project.content, /kind: project/); assert.match(project.content, /record_id: "PROJ-TEST"/);
+  assert.match(compound.path, /04-化合物/); assert.match(compound.content, /kind: compound/);
+  assert.match(asset.file.path, /04-数据资产/); assert.match(asset.file.content, /asset_type: "nmr"/);
+  await assert.rejects(() => createProject(app, {}, id));
+  await assert.rejects(() => createCompound(app, {}, id));
+  await assert.rejects(() => createDataAsset(app, { title: 'bad', assetType: 'invalid', dataPath: 'x' }, id));
+});
+
+test('migration preview uses real legacy IDs and apply honors TOCTOU skip/failure', async () => {
+  const files = [{ path: '实验记录/old.md', basename: 'old' }, { path: '00-博士工作台/02-课题/legacy.md', basename: 'legacy' }];
+  const frontmatter = new Map(files.map((file) => [file.path, { kind: file.path.includes('课题') ? undefined : 'experiment', title: file.basename }]));
+  frontmatter.set(files[1].path, { title: 'Legacy Project' });
+  const app = { vault: { getMarkdownFiles: () => files, getAbstractFileByPath: (path) => files.find((file) => file.path === path) || null }, metadataCache: { getFileCache: (file) => ({ frontmatter: frontmatter.get(file.path) }) }, fileManager: { async processFrontMatter(file, callback) { const data = frontmatter.get(file.path); callback(data); } } };
+  const migration = new PermanentIdMigration({ app }, (prefix) => `${prefix}-NEW`);
+  const items = migration.scan();
+  assert.ok(items.every((item) => item.currentId.startsWith('LEGACY-') && item.currentId.split('-').length >= 3));
+  frontmatter.get(files[0].path).record_id = 'EXP-MANUAL';
+  const result = await migration.apply(items);
+  assert.strictEqual(result.skipped.length, 1);
+  assert.strictEqual(result.migrated.length, 1);
+  assert.strictEqual(frontmatter.get(files[1].path).record_id, 'PROJ-NEW');
+});
+
 test('NMR nucleus classification and archive mapping', () => {
   assert.strictEqual(nmr.classifyNucleus('##$NUC1= <1H>'), '1H');
   assert.strictEqual(nmr.classifyNucleus('##$NUC1= <13C>'), '13C');
@@ -196,6 +295,45 @@ test('NMR archive writes started and success audit entries', async () => {
   assert.match(audit, /"status":"started"/);
   assert.match(audit, /"status":"success"/);
   assert.strictEqual(await fs.access(path.join(archive, '氢谱', 'valid')).then(() => true), true);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test('NMR archive creates DataAsset with relations and records DATA id', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-asset-'));
+  const inbox = path.join(root, 'inbox'); const archive = path.join(root, 'archive');
+  await fs.mkdir(inbox, { recursive: true }); await makeScan(inbox, 'linked', '1H', true);
+  const vault = auditVault(); const store = new nmr.NmrInboxStore(pluginFor(inbox, archive, vault));
+  let received;
+  store.createDataAsset = async (_app, input) => { received = input; return { asset: { recordId: 'DATA-TEST' } }; };
+  const result = await store.archiveSelected(['linked'], { projectId: 'PROJ-A', experimentId: 'EXP-A', compoundId: 'CMP-A' });
+  assert.strictEqual(result.status, 'completed'); assert.strictEqual(received.assetType, 'nmr'); assert.strictEqual(received.projectId, 'PROJ-A');
+  assert.match(vault.files.get('00-博士工作台/应用数据/审计/nmr-archive.jsonl').content, /"data_asset_id":"DATA-TEST"/);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test('NMR registration failure keeps moved raw data and returns partial failure', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-asset-fail-'));
+  const inbox = path.join(root, 'inbox'); const archive = path.join(root, 'archive');
+  await fs.mkdir(inbox, { recursive: true }); await makeScan(inbox, 'registered-fail', '1H', true);
+  const vault = auditVault(); const store = new nmr.NmrInboxStore(pluginFor(inbox, archive, vault));
+  store.createDataAsset = async () => { throw new Error('registration unavailable'); };
+  const result = await store.archiveSelected(['registered-fail']);
+  assert.strictEqual(result.status, 'partial_failure'); assert.strictEqual(result.registrationErrors.length, 1);
+  assert.strictEqual(await fs.access(path.join(archive, '氢谱', 'registered-fail')).then(() => true), true);
+  assert.match(vault.files.get('00-博士工作台/应用数据/审计/nmr-archive.jsonl').content, /registration_error/);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test('NMR final audit failure does not roll back move or DataAsset', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-final-audit-'));
+  const inbox = path.join(root, 'inbox'); const archive = path.join(root, 'archive');
+  await fs.mkdir(inbox, { recursive: true }); await makeScan(inbox, 'audit-final', '1H', true);
+  const vault = auditVault(); const store = new nmr.NmrInboxStore(pluginFor(inbox, archive, vault));
+  let auditCount = 0; store.writeAudit = async (entry) => { auditCount += 1; if (entry.status === 'success') throw new Error('final audit unavailable'); };
+  let created = false; store.createDataAsset = async () => { created = true; return { asset: { recordId: 'DATA-FINAL' } }; };
+  const result = await store.archiveSelected(['audit-final']);
+  assert.strictEqual(result.status, 'partial_failure'); assert.strictEqual(result.auditErrors.length, 1); assert.strictEqual(created, true); assert.ok(auditCount >= 2);
+  assert.strictEqual(await fs.access(path.join(archive, '氢谱', 'audit-final')).then(() => true), true);
   await fs.rm(root, { recursive: true, force: true });
 });
 

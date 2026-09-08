@@ -50,10 +50,14 @@ class MigrationModal extends Modal {
     this.buttonEl.textContent = '迁移中…';
     const result = await this.migration.apply(this.items);
     const failedText = result.failed.length ? `，失败 ${result.failed.length} 条` : '';
-    new Notice(`永久 ID 迁移完成：成功 ${result.migrated.length} 条${failedText}`);
-    this.previewEl.createEl('p', { text: `结果：${result.status}；成功 ${result.migrated.length} 条${failedText}` });
+    const summary = `永久 ID 迁移完成：成功 ${result.migrated.length} 条，跳过 ${result.skipped.length} 条${failedText}`;
+    new Notice(summary);
+    this.previewEl.createEl('p', { text: `${summary}。状态：${result.status}` });
+    result.skipped.forEach((item) => this.previewEl.createEl('p', { text: `跳过：${item.path} · ${item.reason}` }));
+    result.failed.forEach((item) => this.previewEl.createEl('p', { text: `失败：${item.path} · ${item.error}` }));
     if (this.options.onCompleted) await this.options.onCompleted(result);
-    this.close();
+    if (!result.failed.length) this.close();
+    else { this.busy = false; this.items = []; this.buttonEl.disabled = false; this.buttonEl.textContent = '关闭'; this.buttonEl.onclick = () => this.close(); }
   }
 
   onClose() { this.contentEl.empty(); }

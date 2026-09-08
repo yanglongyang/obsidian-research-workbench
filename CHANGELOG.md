@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.1 — Entity Layer Final Closure
+
+### Fixed
+
+- 永久 ID 迁移预览改为显示真实 `LEGACY-*` 身份，并增加 apply 阶段 TOCTOU 跳过保护。
+- 实体 selector 只接受合法且类型匹配的永久 ID。
+- 关系检查增加跨 Project / Experiment / Compound / DataAsset 的 `relation_conflict` 检测。
+- 实验和 NMR 关系下拉框增加轻量联动与冲突提醒。
+- 锁定 NMR → DataAsset 的成功、注册失败、最终审计失败和 started 审计失败语义。
+
+### Changed
+
+- 扩充实体创建、迁移、关系、数据库 schema v3 和 NMR 回归测试。
+- Research Entity Layer 在 v0.4.1 冻结，后续新科研能力进入 v0.5.0+。
+
 ## 0.4.0 — Research Entity Layer
 
 ### Added

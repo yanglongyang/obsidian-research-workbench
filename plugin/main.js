@@ -458,6 +458,24 @@ function validateRelationships(records) {
       validRelationCount += 1;
     });
   });
+  const byUniqueId = (id, type) => {
+    const matches = byId.get(id) || [];
+    return matches.length === 1 && matches[0].type === type ? matches[0] : null;
+  };
+  const addConflict = (source, field, targetId, relatedField, expectedId, actualId, message) => issues.push({ type: 'relation_conflict', sourceId: source.id, sourcePath: source.path, field, targetId, relatedField, expectedId, actualId, message });
+  list.forEach((source) => {
+    if (source.type === 'experiment') {
+      const compound = source.compoundId && byUniqueId(source.compoundId, 'compound');
+      if (source.projectId && compound?.projectId && source.projectId !== compound.projectId) addConflict(source, 'compoundId', source.compoundId, 'projectId', source.projectId, compound.projectId, '实验关联的化合物属于其他课题');
+    }
+    if (source.type === 'data-asset') {
+      const experiment = source.experimentId && byUniqueId(source.experimentId, 'experiment');
+      const compound = source.compoundId && byUniqueId(source.compoundId, 'compound');
+      if (source.projectId && experiment?.projectId && source.projectId !== experiment.projectId) addConflict(source, 'experimentId', source.experimentId, 'projectId', source.projectId, experiment.projectId, '数据资产的 project_id 与关联实验的 project_id 不一致');
+      if (source.projectId && compound?.projectId && source.projectId !== compound.projectId) addConflict(source, 'compoundId', source.compoundId, 'projectId', source.projectId, compound.projectId, '数据资产关联的化合物属于其他课题');
+      if (experiment?.compoundId && compound?.id && experiment.compoundId !== compound.id) addConflict(source, 'compoundId', source.compoundId, 'experiment.compoundId', experiment.compoundId, compound.id, '数据资产的实验与化合物关联不一致');
+    }
+  });
   return { issues, validRelationCount };
 }
 
@@ -811,11 +829,38 @@ async function createDataAsset(app, input, generateRecordId) {
 module.exports = { DATA_ASSET_FOLDER, ASSET_TYPES, buildDataAssetPath, renderDataAssetContent, createDataAsset };
 
 },
+"./lib/entities/identity": function (module, exports, require) {
+const PREFIX_BY_ENTITY = { project: 'PROJ-', experiment: 'EXP-', compound: 'CMP-', 'data-asset': 'DATA-', task: 'TASK-' };
+
+function isPermanentEntityId(id, type) {
+  const value = String(id || '').trim();
+  const prefix = PREFIX_BY_ENTITY[type];
+  return Boolean(prefix && value.startsWith(prefix) && value.length > prefix.length && !value.startsWith('LEGACY-'));
+}
+
+module.exports = { PREFIX_BY_ENTITY, isPermanentEntityId };
+
+},
+"./lib/ui/page-renderers": function (module, exports, require) {
+/* Mechanical page renderer boundary. Renderers receive the WorkbenchView instance
+ * so existing state, helpers and modal behavior remain unchanged. */
+function renderProjectPage(view, title) { return view._renderProjectPage(title); }
+function renderCompoundPage(view) { return view._renderCompoundPage(); }
+function renderIntegrityPage(view) { return view._renderIntegrityPage(); }
+function renderExperimentPage(view) { return view._renderExperimentPage(); }
+function renderResearchDatabasePage(view) { return view._renderResearchDatabasePage(); }
+function renderDataPage(view) { return view._renderDataPage(); }
+function renderNmrInboxPage(view) { return view._renderNmrInboxPage(); }
+
+module.exports = { renderProjectPage, renderCompoundPage, renderIntegrityPage, renderExperimentPage, renderResearchDatabasePage, renderDataPage, renderNmrInboxPage };
+
+},
 "./lib/entities/store": function (module, exports, require) {
 const { PROJECT_ENTITY_FOLDER } = require('./lib/entities/project');
 const { COMPOUND_FOLDER } = require('./lib/entities/compound');
 const { DATA_ASSET_FOLDER } = require('./lib/entities/data-asset');
 const { EXPERIMENT_FOLDERS } = require('./lib/data');
+const { isPermanentEntityId } = require('./lib/entities/identity');
 
 function text(value) { return typeof value === 'string' ? value.trim() : ''; }
 function inFolder(file, folders) {
@@ -832,6 +877,7 @@ class EntityStore {
       return { file, frontmatter };
     }).filter(({ file, frontmatter }) => frontmatter.kind === kind && inFolder(file, folders)).map(({ file, frontmatter }) => ({
       file,
+      kind,
       id: text(frontmatter.record_id),
       title: text(frontmatter.title) || file.basename,
       projectId: text(frontmatter.project_id),
@@ -849,17 +895,23 @@ class EntityStore {
     })).sort((a, b) => a.title.localeCompare(b.title));
   }
 
-  listProjects() { return this.list('project').filter((item) => item.id); }
-  listExperiments() { return this.list('experiment').filter((item) => item.id); }
-  listCompounds() { return this.list('compound').filter((item) => item.id); }
-  listDataAssets() { return this.list('data-asset').filter((item) => item.id); }
+  listProjects() { return this.list('project').filter((item) => isPermanentEntityId(item.id, 'project')); }
+  listExperiments() { return this.list('experiment').filter((item) => isPermanentEntityId(item.id, 'experiment')); }
+  listCompounds() { return this.list('compound').filter((item) => isPermanentEntityId(item.id, 'compound')); }
+  listDataAssets() { return this.list('data-asset').filter((item) => isPermanentEntityId(item.id, 'data-asset')); }
+
+  getById(id, expectedKind = '') {
+    const items = expectedKind ? this.list(expectedKind) : ['project', 'experiment', 'compound', 'data-asset'].flatMap((kind) => this.list(kind));
+    const matches = items.filter((item) => isPermanentEntityId(item.id, expectedKind || ({ project: 'project', experiment: 'experiment', compound: 'compound', 'data-asset': 'data-asset' }[item.kind] || '') ) && item.id === id);
+    return matches.length === 1 ? matches[0] : null;
+  }
 }
 
 module.exports = { EntityStore };
 
 },
 "./lib/migrations/permanent-id": function (module, exports, require) {
-const { recordType } = require('./lib/database');
+const { recordType, identityFor } = require('./lib/database');
 
 const PREFIX_BY_TYPE = { task: 'TASK', experiment: 'EXP', project: 'PROJ' };
 
@@ -876,7 +928,8 @@ class PermanentIdMigration {
       const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
       const type = recordType(file.path, frontmatter);
       if (!PREFIX_BY_TYPE[type] || String(frontmatter.record_id || '').trim()) continue;
-      items.push({ file, path: file.path, type, currentId: `LEGACY-${type.toUpperCase()}`, proposedId: this.generateRecordId(PREFIX_BY_TYPE[type]), title: String(frontmatter.title || file.basename) });
+      const identity = identityFor(file.path, frontmatter, type);
+      items.push({ file, path: file.path, type, currentId: identity.id, proposedId: this.generateRecordId(PREFIX_BY_TYPE[type]), title: String(frontmatter.title || file.basename) });
     }
     return items;
   }
@@ -885,19 +938,24 @@ class PermanentIdMigration {
     const candidates = Array.isArray(items) ? items : [];
     const migrated = [];
     const failed = [];
+    const skipped = [];
     for (const item of candidates) {
       try {
         if (!item.file || !this.app.vault.getAbstractFileByPath(item.path)) throw new Error('文件不存在，可能已被移动。');
+        const latest = this.app.metadataCache.getFileCache(item.file)?.frontmatter || {};
+        if (String(latest.record_id || '').trim()) { skipped.push({ ...item, reason: 'record_id 已在预览后写入' }); continue; }
         await this.app.fileManager.processFrontMatter(item.file, (data) => {
           if (!data.record_id) data.record_id = item.proposedId;
         });
+        const after = this.app.metadataCache.getFileCache(item.file)?.frontmatter || {};
+        if (String(after.record_id || '').trim() && after.record_id !== item.proposedId) { skipped.push({ ...item, reason: 'record_id 已在写入过程中被其他操作设置' }); continue; }
         migrated.push(item);
       } catch (error) {
         failed.push({ ...item, error: error instanceof Error ? error.message : String(error) });
         console.error('[Research Workbench] permanent ID migration failed', error);
       }
     }
-    return { status: failed.length ? (migrated.length ? 'partial_failure' : 'failed') : 'completed', migrated, failed, skipped: [] };
+    return { status: failed.length ? (migrated.length || skipped.length ? 'partial_failure' : 'failed') : 'completed', migrated, failed, skipped };
   }
 }
 
@@ -1035,9 +1093,10 @@ async function scanDirectory(root, current, results) {
 }
 
 class NmrInboxStore {
-  constructor(plugin) {
+  constructor(plugin, options = {}) {
     this.plugin = plugin;
     this.app = plugin?.app;
+    this.createDataAsset = options.createDataAsset || createDataAsset;
   }
 
   get inboxFolder() {
@@ -1172,7 +1231,7 @@ class NmrInboxStore {
 
   async archiveSelected(relativePaths, relations = {}) {
     const { plans, errors } = await this.preflightArchive(relativePaths);
-    if (errors.length) return { status: 'failed', archived: [], failed: errors.map((error) => ({ error })), skipped: [], errors };
+    if (errors.length) return { status: 'failed', archived: [], failed: errors.map((error) => ({ error })), skipped: [], auditErrors: [], registrationErrors: [], errors };
     const archiveRoot = resolveNmrPath(this.archiveFolder);
     const archived = [];
     const failed = [];
@@ -1214,7 +1273,7 @@ class NmrInboxStore {
         archived.push(plan);
         let dataAssetId = '';
         try {
-          const result = await createDataAsset(this.app, {
+          const result = await this.createDataAsset(this.app, {
             title: `${plan.relativeScanPath} · ${plan.nucleus} NMR`,
             assetType: 'nmr',
             dataPath: plan.destinationPath,
@@ -1292,6 +1351,7 @@ class NmrArchiveModal extends Modal {
     this.contentEl.createEl('h2', { text: '确认归档核磁原始数据' });
     this.body = this.contentEl.createDiv();
     this.body.createDiv({ cls: 'phdcc-empty', text: '正在检查来源、核种和目标路径…' });
+    this.relationContainer = this.contentEl.createDiv({ cls: 'phdcc-archive-relations' });
     this.renderRelations();
     const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
     const cancel = footer.createEl('button', { text: '取消', type: 'button' });
@@ -1305,7 +1365,8 @@ class NmrArchiveModal extends Modal {
   renderRelations() {
     const store = this.options.entityStore;
     if (!store) return;
-    const container = this.contentEl.createDiv({ cls: 'phdcc-archive-relations' });
+    const container = this.relationContainer;
+    container.empty();
     container.createEl('h3', { text: '科研关系（可选）' });
     const projects = store.listProjects();
     const experiments = store.listExperiments();
@@ -1314,12 +1375,30 @@ class NmrArchiveModal extends Modal {
       new Setting(container).setName(label).addDropdown((dropdown) => {
         dropdown.addOption('', '不关联');
         items.forEach((item) => { if (item.id) dropdown.addOption(item.id, `${item.title} · ${item.id}`); });
-        dropdown.onChange((value) => { this.relations[idKey] = value; const item = items.find((candidate) => candidate.id === value); this.relations[key] = item?.title || ''; });
+        dropdown.setValue(this.relations[idKey] || '');
+        dropdown.onChange((value) => {
+          this.relations[idKey] = value;
+          const item = items.find((candidate) => candidate.id === value);
+          this.relations[key] = item?.title || '';
+          if (key === 'project') this.renderRelations();
+          if (key === 'experiment' && item) {
+            if (!this.relations.projectId && item.projectId) { this.relations.projectId = item.projectId; this.relations.project = projects.find((candidate) => candidate.id === item.projectId)?.title || ''; }
+            if (!this.relations.compoundId && item.compoundId) { this.relations.compoundId = item.compoundId; this.relations.compound = compounds.find((candidate) => candidate.id === item.compoundId)?.title || ''; }
+            if (this.relations.projectId && item.projectId && this.relations.projectId !== item.projectId) new Notice('关联实验属于其他课题，请检查选择。');
+            this.renderRelations();
+          }
+          if (key === 'compound' && item) {
+            if (!this.relations.projectId && item.projectId) { this.relations.projectId = item.projectId; this.relations.project = projects.find((candidate) => candidate.id === item.projectId)?.title || ''; this.renderRelations(); }
+            else if (this.relations.projectId && item.projectId && this.relations.projectId !== item.projectId) new Notice('所选化合物属于其他课题，请检查选择。');
+          }
+        });
       });
     };
     add('课题', 'project', projects);
-    add('实验', 'experiment', experiments);
-    add('化合物', 'compound', compounds);
+    const filteredExperiments = this.relations.projectId ? experiments.filter((item) => item.projectId === this.relations.projectId) : experiments;
+    const filteredCompounds = this.relations.projectId ? compounds.filter((item) => item.projectId === this.relations.projectId) : compounds;
+    add('实验', 'experiment', filteredExperiments);
+    add('化合物', 'compound', filteredCompounds);
   }
 
   async prepare() {
@@ -1543,6 +1622,15 @@ const STATUS_OPTIONS = [
   ['blocked', '受阻']
 ];
 
+function filterCompoundsByProject(compounds, projectId) {
+  const items = Array.isArray(compounds) ? compounds : [];
+  return projectId ? items.filter((item) => item.projectId === projectId) : items;
+}
+
+function suggestProjectFromCompound(projectId, compound) {
+  return projectId || compound?.projectId || '';
+}
+
 class ExperimentModal extends Modal {
   constructor(app, taskStore, options = {}) {
     super(app);
@@ -1587,8 +1675,8 @@ class ExperimentModal extends Modal {
       dropdown.onChange((value) => { this.state.status = value; });
     });
 
-    this.addRelationSelect('project');
-    this.addRelationSelect('compound');
+    this.relationContainer = contentEl.createDiv({ cls: 'phdcc-experiment-relations' });
+    this.renderRelationSelectors();
     new Setting(contentEl).setName('实验类型').addDropdown((dropdown) => {
       [['general', '通用实验'], ['synthesis', '合成'], ['characterization', '表征'], ['analysis', '分析']]
         .forEach(([value, label]) => dropdown.addOption(value, label));
@@ -1627,14 +1715,24 @@ class ExperimentModal extends Modal {
     });
   }
 
-  addRelationSelect(kind) {
+  renderRelationSelectors() {
     const store = this.options.entityStore;
-    const items = store ? (kind === 'project' ? store.listProjects() : store.listCompounds()) : [];
-    const label = kind === 'project' ? '关联课题（可选）' : '关联化合物（可选）';
-    new Setting(this.contentEl).setName(label).addDropdown((dropdown) => {
+    if (!this.relationContainer || !store) return;
+    this.relationContainer.empty();
+    const projects = store.listProjects();
+    const compounds = filterCompoundsByProject(store.listCompounds(), this.state.projectId);
+    new Setting(this.relationContainer).setName('关联课题（可选）').addDropdown((dropdown) => {
       dropdown.addOption('', '不关联');
-      items.forEach((item) => dropdown.addOption(item.id, `${item.title} · ${item.id}`));
-      dropdown.onChange((value) => { this.state[`${kind}Id`] = value; const item = items.find((candidate) => candidate.id === value); this.state[kind] = item?.title || ''; });
+      projects.forEach((item) => dropdown.addOption(item.id, `${item.title} · ${item.id}`));
+      dropdown.setValue(this.state.projectId);
+      dropdown.onChange((value) => { this.state.projectId = value; const item = projects.find((candidate) => candidate.id === value); this.state.project = item?.title || ''; this.renderRelationSelectors(); });
+    });
+    new Setting(this.relationContainer).setName('关联化合物（可选）').addDropdown((dropdown) => {
+      dropdown.addOption('', '不关联');
+      compounds.forEach((item) => dropdown.addOption(item.id, `${item.title} · ${item.id}`));
+      if (this.state.compoundId && !compounds.some((item) => item.id === this.state.compoundId)) dropdown.addOption(this.state.compoundId, `${this.state.compound || '已选化合物'} · 关系冲突`);
+      dropdown.setValue(this.state.compoundId);
+      dropdown.onChange((value) => { this.state.compoundId = value; const item = store.listCompounds().find((candidate) => candidate.id === value); this.state.compound = item?.title || ''; const suggested = suggestProjectFromCompound(this.state.projectId, item); if (!this.state.projectId && suggested) { this.state.projectId = suggested; this.state.project = projects.find((candidate) => candidate.id === suggested)?.title || ''; this.renderRelationSelectors(); } else if (this.state.projectId && item?.projectId && item.projectId !== this.state.projectId) new Notice('所选化合物属于其他课题，请检查关联。'); });
     });
   }
 
@@ -1683,7 +1781,7 @@ class ExperimentModal extends Modal {
   }
 }
 
-module.exports = { ExperimentModal };
+module.exports = { ExperimentModal, filterCompoundsByProject, suggestProjectFromCompound };
 
 },
 "./lib/settings": function (module, exports, require) {
@@ -1935,7 +2033,7 @@ class MigrationModal extends Modal {
     this.contentEl.createEl('p', { text: '为仍使用旧路径识别的任务、实验和课题补写永久 record_id。只会新增缺失字段，不会移动或改写其他内容。' });
     this.previewEl = this.contentEl.createDiv({ cls: 'phdcc-migration-preview' });
     this.buttonEl = this.contentEl.createEl('button', { text: '扫描旧记录', cls: 'mod-cta', attr: { type: 'button' } });
-    this.buttonEl.addEventListener('click', () => this.scan());
+    this.buttonEl.addEventListener('click', () => { if (this.items.length) void this.apply(); else this.scan(); });
     this.scan();
   }
 
@@ -1958,7 +2056,6 @@ class MigrationModal extends Modal {
     if (this.items.length > 20) this.previewEl.createEl('p', { text: `另有 ${this.items.length - 20} 条未展开。` });
     this.buttonEl.disabled = false;
     this.buttonEl.textContent = `确认迁移 ${this.items.length} 条记录`;
-    this.buttonEl.onclick = () => this.apply();
   }
 
   async apply() {
@@ -1968,10 +2065,14 @@ class MigrationModal extends Modal {
     this.buttonEl.textContent = '迁移中…';
     const result = await this.migration.apply(this.items);
     const failedText = result.failed.length ? `，失败 ${result.failed.length} 条` : '';
-    new Notice(`永久 ID 迁移完成：成功 ${result.migrated.length} 条${failedText}`);
-    this.previewEl.createEl('p', { text: `结果：${result.status}；成功 ${result.migrated.length} 条${failedText}` });
+    const summary = `永久 ID 迁移完成：成功 ${result.migrated.length} 条，跳过 ${result.skipped.length} 条${failedText}`;
+    new Notice(summary);
+    this.previewEl.createEl('p', { text: `${summary}。状态：${result.status}` });
+    result.skipped.forEach((item) => this.previewEl.createEl('p', { text: `跳过：${item.path} · ${item.reason}` }));
+    result.failed.forEach((item) => this.previewEl.createEl('p', { text: `失败：${item.path} · ${item.error}` }));
     if (this.options.onCompleted) await this.options.onCompleted(result);
-    this.close();
+    if (!result.failed.length) this.close();
+    else { this.busy = false; this.items = []; this.buttonEl.disabled = false; this.buttonEl.textContent = '关闭'; this.buttonEl.onclick = () => this.close(); }
   }
 
   onClose() { this.contentEl.empty(); }
@@ -2005,6 +2106,7 @@ const { ProjectModal } = require('./lib/modals/project-modal');
 const { CompoundModal } = require('./lib/modals/compound-modal');
 const { DataAssetModal } = require('./lib/modals/data-asset-modal');
 const { MigrationModal } = require('./lib/modals/migration-modal');
+const pageRenderers = require('./lib/ui/page-renderers');
 
 const VIEW_TYPE = 'phd-command-center-view';
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
@@ -2214,17 +2316,17 @@ class WorkbenchView extends ItemView {
       overview: () => this.renderOverview(),
       today: () => this.renderToday(),
       calendar: () => this.renderCalendar(),
-      projects: () => this.renderProjectPage('课题项目'),
+      projects: () => pageRenderers.renderProjectPage(this, '课题项目'),
       reviews: () => this.renderReadOnlyPage('周月总结', PROGRESS_FOLDER, false),
-      experiments: () => this.renderExperimentPage(),
-      compound: () => this.renderCompoundPage(),
-      'research-db': () => this.renderResearchDatabasePage(),
-      'nmr-inbox': () => this.renderNmrInboxPage(),
-      data: () => this.renderDataPage(),
+      experiments: () => pageRenderers.renderExperimentPage(this),
+      compound: () => pageRenderers.renderCompoundPage(this),
+      'research-db': () => pageRenderers.renderResearchDatabasePage(this),
+      'nmr-inbox': () => pageRenderers.renderNmrInboxPage(this),
+      data: () => pageRenderers.renderDataPage(this),
       literature: () => this.renderReadOnlyPage('文献资料', LITERATURE_FOLDERS, false),
       writing: () => this.renderReadOnlyPage('写作管线', WRITING_FOLDER, true),
-      'daily-review': () => this.renderFocusPage('今日复盘', '复盘', '写下今天最重要的收获与下一步改进')
-      ,integrity: () => this.renderIntegrityPage()
+      'daily-review': () => this.renderFocusPage('今日复盘', '复盘', '写下今天最重要的收获与下一步改进'),
+      integrity: () => pageRenderers.renderIntegrityPage(this)
     }[this.activeSection] || (() => this.renderToday());
     renderer();
   }
@@ -2485,7 +2587,7 @@ class WorkbenchView extends ItemView {
     void this.refresh();
   }
 
-  renderProjectPage(title) {
+  _renderProjectPage(title) {
     this.renderPageHeader(title, '课题、实验与数据的关系入口', { label: '+ 新增课题', onClick: () => this.openProjectModal() });
     const formal = this.entityStore.listProjects();
     const items = formal.length ? formal : this.filteredFiles(this.readOnlyItems(PROJECT_FOLDER, 30, true));
@@ -2503,7 +2605,7 @@ class WorkbenchView extends ItemView {
     });
   }
 
-  renderCompoundPage() {
+  _renderCompoundPage() {
     this.renderPageHeader('化合物', '化合物是实验与数据资产的稳定关联节点', { label: '+ 新增化合物', onClick: () => this.openCompoundModal() });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
     const items = this.entityStore.listCompounds().filter((item) => !this.searchQuery || `${item.title} ${item.compoundCode} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
@@ -2518,16 +2620,17 @@ class WorkbenchView extends ItemView {
     });
   }
 
-  renderIntegrityPage() {
+  _renderIntegrityPage() {
     this.renderPageHeader('关系检查', '永久 ID 引用完整性与科研实体关系', { label: '返回科研数据库', onClick: () => { this.activeSection = 'research-db'; this.saveUiState(); this.renderPage(); } });
     const stats = this.pageEl.createDiv({ cls: 'phdcc-stats' });
     [['有效关系', this.researchDatabase.validRelationCount || 0], ['问题', this.researchDatabase.relationshipIssues?.length || 0], ['重复 ID', this.researchDatabase.duplicateIds?.length || 0]].forEach(([label, value]) => { const card = stats.createDiv({ cls: 'phdcc-stat-card' }); card.createDiv({ cls: 'phdcc-stat-label', text: label }); card.createDiv({ cls: 'phdcc-stat-value', text: String(value) }); });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
     if (!this.researchDatabase.relationshipIssues?.length) return void card.createDiv({ cls: 'phdcc-empty', text: '关系检查通过，未发现问题。' });
-    this.researchDatabase.relationshipIssues.forEach((issue) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); row.createDiv({ cls: 'phdcc-file-title', text: `${issue.type} · ${issue.message}` }); row.createDiv({ cls: 'phdcc-file-meta', text: `${issue.sourcePath} · ${issue.field || ''} · ${issue.targetId || ''}` }); const open = row.createEl('button', { cls: 'phdcc-row-action', text: '打开来源', attr: { type: 'button' } }); open.addEventListener('click', () => { const file = this.app.vault.getAbstractFileByPath(issue.sourcePath); if (file) void this.openFile(file); }); });
+    const labels = { missing_target: '缺失目标', wrong_target_type: '类型错误', legacy_reference: '旧 ID 引用', self_reference: '自引用', duplicate_record_id: '重复 ID', relation_conflict: '关系冲突' };
+    this.researchDatabase.relationshipIssues.forEach((issue) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); row.createDiv({ cls: 'phdcc-file-title', text: `${labels[issue.type] || issue.type} · ${issue.message}` }); row.createDiv({ cls: 'phdcc-file-meta', text: `${issue.sourcePath} · ${issue.field || ''} · ${issue.targetId || ''} · ${issue.type}` }); const open = row.createEl('button', { cls: 'phdcc-row-action', text: '打开来源', attr: { type: 'button' } }); open.addEventListener('click', () => { const file = this.app.vault.getAbstractFileByPath(issue.sourcePath); if (file) void this.openFile(file); }); });
   }
 
-  renderExperimentPage() {
+  _renderExperimentPage() {
     this.renderPageHeader('实验记录', '新建记录存入工作台；旧记录保持只读', {
       label: '+ 新增实验记录',
       onClick: () => this.openExperimentModal()
@@ -2563,7 +2666,7 @@ class WorkbenchView extends ItemView {
     action.addEventListener('click', () => { void this.openFile(file); });
   }
 
-  renderResearchDatabasePage() {
+  _renderResearchDatabasePage() {
     this.renderPageHeader('科研数据库', '任务、实验和科研文件的统一索引', {
       label: '+ 新增任务',
       onClick: () => this.openTaskModal()
@@ -2680,7 +2783,7 @@ class WorkbenchView extends ItemView {
     });
   }
 
-  renderDataPage() {
+  _renderDataPage() {
     this.renderPageHeader('数据资产', '原始数据位置与派生索引', { label: '+ 新增数据资产', onClick: () => this.openDataAssetModal() });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
     const assets = this.entityStore.listDataAssets().filter((item) => !this.searchQuery || `${item.title} ${item.assetType} ${item.dataPath} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
@@ -2690,7 +2793,7 @@ class WorkbenchView extends ItemView {
     if (!assets.length && !legacy.length) card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配数据资产' : '暂无数据资产' });
   }
 
-  renderNmrInboxPage() {
+  _renderNmrInboxPage() {
     this.renderPageHeader('待解核磁', '勾选后预检；确认前不会移动任何原始数据', {
       label: `归档已选 (${this.selectedNmrPaths.size})`,
       disabled: this.selectedNmrPaths.size === 0,

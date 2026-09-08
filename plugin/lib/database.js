@@ -104,6 +104,24 @@ function validateRelationships(records) {
       validRelationCount += 1;
     });
   });
+  const byUniqueId = (id, type) => {
+    const matches = byId.get(id) || [];
+    return matches.length === 1 && matches[0].type === type ? matches[0] : null;
+  };
+  const addConflict = (source, field, targetId, relatedField, expectedId, actualId, message) => issues.push({ type: 'relation_conflict', sourceId: source.id, sourcePath: source.path, field, targetId, relatedField, expectedId, actualId, message });
+  list.forEach((source) => {
+    if (source.type === 'experiment') {
+      const compound = source.compoundId && byUniqueId(source.compoundId, 'compound');
+      if (source.projectId && compound?.projectId && source.projectId !== compound.projectId) addConflict(source, 'compoundId', source.compoundId, 'projectId', source.projectId, compound.projectId, '实验关联的化合物属于其他课题');
+    }
+    if (source.type === 'data-asset') {
+      const experiment = source.experimentId && byUniqueId(source.experimentId, 'experiment');
+      const compound = source.compoundId && byUniqueId(source.compoundId, 'compound');
+      if (source.projectId && experiment?.projectId && source.projectId !== experiment.projectId) addConflict(source, 'experimentId', source.experimentId, 'projectId', source.projectId, experiment.projectId, '数据资产的 project_id 与关联实验的 project_id 不一致');
+      if (source.projectId && compound?.projectId && source.projectId !== compound.projectId) addConflict(source, 'compoundId', source.compoundId, 'projectId', source.projectId, compound.projectId, '数据资产关联的化合物属于其他课题');
+      if (experiment?.compoundId && compound?.id && experiment.compoundId !== compound.id) addConflict(source, 'compoundId', source.compoundId, 'experiment.compoundId', experiment.compoundId, compound.id, '数据资产的实验与化合物关联不一致');
+    }
+  });
   return { issues, validRelationCount };
 }
 

@@ -128,9 +128,10 @@ async function scanDirectory(root, current, results) {
 }
 
 class NmrInboxStore {
-  constructor(plugin) {
+  constructor(plugin, options = {}) {
     this.plugin = plugin;
     this.app = plugin?.app;
+    this.createDataAsset = options.createDataAsset || createDataAsset;
   }
 
   get inboxFolder() {
@@ -265,7 +266,7 @@ class NmrInboxStore {
 
   async archiveSelected(relativePaths, relations = {}) {
     const { plans, errors } = await this.preflightArchive(relativePaths);
-    if (errors.length) return { status: 'failed', archived: [], failed: errors.map((error) => ({ error })), skipped: [], errors };
+    if (errors.length) return { status: 'failed', archived: [], failed: errors.map((error) => ({ error })), skipped: [], auditErrors: [], registrationErrors: [], errors };
     const archiveRoot = resolveNmrPath(this.archiveFolder);
     const archived = [];
     const failed = [];
@@ -307,7 +308,7 @@ class NmrInboxStore {
         archived.push(plan);
         let dataAssetId = '';
         try {
-          const result = await createDataAsset(this.app, {
+          const result = await this.createDataAsset(this.app, {
             title: `${plan.relativeScanPath} · ${plan.nucleus} NMR`,
             assetType: 'nmr',
             dataPath: plan.destinationPath,

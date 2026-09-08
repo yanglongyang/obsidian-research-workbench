@@ -8,6 +8,8 @@ const entries = [
   ['./lib/entities/project', path.join(pluginDir, 'lib', 'entities', 'project.js')],
   ['./lib/entities/compound', path.join(pluginDir, 'lib', 'entities', 'compound.js')],
   ['./lib/entities/data-asset', path.join(pluginDir, 'lib', 'entities', 'data-asset.js')],
+  ['./lib/entities/identity', path.join(pluginDir, 'lib', 'entities', 'identity.js')],
+  ['./lib/ui/page-renderers', path.join(pluginDir, 'lib', 'ui', 'page-renderers.js')],
   ['./lib/entities/store', path.join(pluginDir, 'lib', 'entities', 'store.js')],
   ['./lib/migrations/permanent-id', path.join(pluginDir, 'lib', 'migrations', 'permanent-id.js')],
   ['./lib/nmr', path.join(pluginDir, 'lib', 'nmr.js')],
@@ -40,13 +42,16 @@ function normalizeLocalRequires(id, source) {
       .replace("require('./modals/project-modal')", "require('./lib/modals/project-modal')")
       .replace("require('./modals/compound-modal')", "require('./lib/modals/compound-modal')")
       .replace("require('./modals/data-asset-modal')", "require('./lib/modals/data-asset-modal')")
-      .replace("require('./modals/migration-modal')", "require('./lib/modals/migration-modal')");
+      .replace("require('./modals/migration-modal')", "require('./lib/modals/migration-modal')")
+      .replace("require('./ui/page-renderers')", "require('./lib/ui/page-renderers')");
   }
+  if (id === './lib/ui/page-renderers') return source;
   if (id === './lib/entities/store') {
     return source
       .replace("require('./project')", "require('./lib/entities/project')")
       .replace("require('./compound')", "require('./lib/entities/compound')")
       .replace("require('./data-asset')", "require('./lib/entities/data-asset')")
+      .replace("require('./identity')", "require('./lib/entities/identity')")
       .replace("require('../data')", "require('./lib/data')");
   }
   if (id === './lib/migrations/permanent-id') {

@@ -8,6 +8,15 @@ const STATUS_OPTIONS = [
   ['blocked', '受阻']
 ];
 
+function filterCompoundsByProject(compounds, projectId) {
+  const items = Array.isArray(compounds) ? compounds : [];
+  return projectId ? items.filter((item) => item.projectId === projectId) : items;
+}
+
+function suggestProjectFromCompound(projectId, compound) {
+  return projectId || compound?.projectId || '';
+}
+
 class ExperimentModal extends Modal {
   constructor(app, taskStore, options = {}) {
     super(app);
@@ -52,8 +61,8 @@ class ExperimentModal extends Modal {
       dropdown.onChange((value) => { this.state.status = value; });
     });
 
-    this.addRelationSelect('project');
-    this.addRelationSelect('compound');
+    this.relationContainer = contentEl.createDiv({ cls: 'phdcc-experiment-relations' });
+    this.renderRelationSelectors();
     new Setting(contentEl).setName('实验类型').addDropdown((dropdown) => {
       [['general', '通用实验'], ['synthesis', '合成'], ['characterization', '表征'], ['analysis', '分析']]
         .forEach(([value, label]) => dropdown.addOption(value, label));
@@ -92,14 +101,24 @@ class ExperimentModal extends Modal {
     });
   }
 
-  addRelationSelect(kind) {
+  renderRelationSelectors() {
     const store = this.options.entityStore;
-    const items = store ? (kind === 'project' ? store.listProjects() : store.listCompounds()) : [];
-    const label = kind === 'project' ? '关联课题（可选）' : '关联化合物（可选）';
-    new Setting(this.contentEl).setName(label).addDropdown((dropdown) => {
+    if (!this.relationContainer || !store) return;
+    this.relationContainer.empty();
+    const projects = store.listProjects();
+    const compounds = filterCompoundsByProject(store.listCompounds(), this.state.projectId);
+    new Setting(this.relationContainer).setName('关联课题（可选）').addDropdown((dropdown) => {
       dropdown.addOption('', '不关联');
-      items.forEach((item) => dropdown.addOption(item.id, `${item.title} · ${item.id}`));
-      dropdown.onChange((value) => { this.state[`${kind}Id`] = value; const item = items.find((candidate) => candidate.id === value); this.state[kind] = item?.title || ''; });
+      projects.forEach((item) => dropdown.addOption(item.id, `${item.title} · ${item.id}`));
+      dropdown.setValue(this.state.projectId);
+      dropdown.onChange((value) => { this.state.projectId = value; const item = projects.find((candidate) => candidate.id === value); this.state.project = item?.title || ''; this.renderRelationSelectors(); });
+    });
+    new Setting(this.relationContainer).setName('关联化合物（可选）').addDropdown((dropdown) => {
+      dropdown.addOption('', '不关联');
+      compounds.forEach((item) => dropdown.addOption(item.id, `${item.title} · ${item.id}`));
+      if (this.state.compoundId && !compounds.some((item) => item.id === this.state.compoundId)) dropdown.addOption(this.state.compoundId, `${this.state.compound || '已选化合物'} · 关系冲突`);
+      dropdown.setValue(this.state.compoundId);
+      dropdown.onChange((value) => { this.state.compoundId = value; const item = store.listCompounds().find((candidate) => candidate.id === value); this.state.compound = item?.title || ''; const suggested = suggestProjectFromCompound(this.state.projectId, item); if (!this.state.projectId && suggested) { this.state.projectId = suggested; this.state.project = projects.find((candidate) => candidate.id === suggested)?.title || ''; this.renderRelationSelectors(); } else if (this.state.projectId && item?.projectId && item.projectId !== this.state.projectId) new Notice('所选化合物属于其他课题，请检查关联。'); });
     });
   }
 
@@ -148,4 +167,4 @@ class ExperimentModal extends Modal {
   }
 }
 
-module.exports = { ExperimentModal };
+module.exports = { ExperimentModal, filterCompoundsByProject, suggestProjectFromCompound };

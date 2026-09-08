@@ -22,6 +22,7 @@ const { ProjectModal } = require('./modals/project-modal');
 const { CompoundModal } = require('./modals/compound-modal');
 const { DataAssetModal } = require('./modals/data-asset-modal');
 const { MigrationModal } = require('./modals/migration-modal');
+const pageRenderers = require('./ui/page-renderers');
 
 const VIEW_TYPE = 'phd-command-center-view';
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
@@ -231,17 +232,17 @@ class WorkbenchView extends ItemView {
       overview: () => this.renderOverview(),
       today: () => this.renderToday(),
       calendar: () => this.renderCalendar(),
-      projects: () => this.renderProjectPage('课题项目'),
+      projects: () => pageRenderers.renderProjectPage(this, '课题项目'),
       reviews: () => this.renderReadOnlyPage('周月总结', PROGRESS_FOLDER, false),
-      experiments: () => this.renderExperimentPage(),
-      compound: () => this.renderCompoundPage(),
-      'research-db': () => this.renderResearchDatabasePage(),
-      'nmr-inbox': () => this.renderNmrInboxPage(),
-      data: () => this.renderDataPage(),
+      experiments: () => pageRenderers.renderExperimentPage(this),
+      compound: () => pageRenderers.renderCompoundPage(this),
+      'research-db': () => pageRenderers.renderResearchDatabasePage(this),
+      'nmr-inbox': () => pageRenderers.renderNmrInboxPage(this),
+      data: () => pageRenderers.renderDataPage(this),
       literature: () => this.renderReadOnlyPage('文献资料', LITERATURE_FOLDERS, false),
       writing: () => this.renderReadOnlyPage('写作管线', WRITING_FOLDER, true),
       'daily-review': () => this.renderFocusPage('今日复盘', '复盘', '写下今天最重要的收获与下一步改进'),
-      integrity: () => this.renderIntegrityPage()
+      integrity: () => pageRenderers.renderIntegrityPage(this)
     }[this.activeSection] || (() => this.renderToday());
     renderer();
   }
@@ -502,7 +503,7 @@ class WorkbenchView extends ItemView {
     void this.refresh();
   }
 
-  renderProjectPage(title) {
+  _renderProjectPage(title) {
     this.renderPageHeader(title, '课题、实验与数据的关系入口', { label: '+ 新增课题', onClick: () => this.openProjectModal() });
     const formal = this.entityStore.listProjects();
     const items = formal.length ? formal : this.filteredFiles(this.readOnlyItems(PROJECT_FOLDER, 30, true));
@@ -520,7 +521,7 @@ class WorkbenchView extends ItemView {
     });
   }
 
-  renderCompoundPage() {
+  _renderCompoundPage() {
     this.renderPageHeader('化合物', '化合物是实验与数据资产的稳定关联节点', { label: '+ 新增化合物', onClick: () => this.openCompoundModal() });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
     const items = this.entityStore.listCompounds().filter((item) => !this.searchQuery || `${item.title} ${item.compoundCode} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
@@ -535,16 +536,17 @@ class WorkbenchView extends ItemView {
     });
   }
 
-  renderIntegrityPage() {
+  _renderIntegrityPage() {
     this.renderPageHeader('关系检查', '永久 ID 引用完整性与科研实体关系', { label: '返回科研数据库', onClick: () => { this.activeSection = 'research-db'; this.saveUiState(); this.renderPage(); } });
     const stats = this.pageEl.createDiv({ cls: 'phdcc-stats' });
     [['有效关系', this.researchDatabase.validRelationCount || 0], ['问题', this.researchDatabase.relationshipIssues?.length || 0], ['重复 ID', this.researchDatabase.duplicateIds?.length || 0]].forEach(([label, value]) => { const card = stats.createDiv({ cls: 'phdcc-stat-card' }); card.createDiv({ cls: 'phdcc-stat-label', text: label }); card.createDiv({ cls: 'phdcc-stat-value', text: String(value) }); });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
     if (!this.researchDatabase.relationshipIssues?.length) return void card.createDiv({ cls: 'phdcc-empty', text: '关系检查通过，未发现问题。' });
-    this.researchDatabase.relationshipIssues.forEach((issue) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); row.createDiv({ cls: 'phdcc-file-title', text: `${issue.type} · ${issue.message}` }); row.createDiv({ cls: 'phdcc-file-meta', text: `${issue.sourcePath} · ${issue.field || ''} · ${issue.targetId || ''}` }); const open = row.createEl('button', { cls: 'phdcc-row-action', text: '打开来源', attr: { type: 'button' } }); open.addEventListener('click', () => { const file = this.app.vault.getAbstractFileByPath(issue.sourcePath); if (file) void this.openFile(file); }); });
+    const labels = { missing_target: '缺失目标', wrong_target_type: '类型错误', legacy_reference: '旧 ID 引用', self_reference: '自引用', duplicate_record_id: '重复 ID', relation_conflict: '关系冲突' };
+    this.researchDatabase.relationshipIssues.forEach((issue) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); row.createDiv({ cls: 'phdcc-file-title', text: `${labels[issue.type] || issue.type} · ${issue.message}` }); row.createDiv({ cls: 'phdcc-file-meta', text: `${issue.sourcePath} · ${issue.field || ''} · ${issue.targetId || ''} · ${issue.type}` }); const open = row.createEl('button', { cls: 'phdcc-row-action', text: '打开来源', attr: { type: 'button' } }); open.addEventListener('click', () => { const file = this.app.vault.getAbstractFileByPath(issue.sourcePath); if (file) void this.openFile(file); }); });
   }
 
-  renderExperimentPage() {
+  _renderExperimentPage() {
     this.renderPageHeader('实验记录', '新建记录存入工作台；旧记录保持只读', {
       label: '+ 新增实验记录',
       onClick: () => this.openExperimentModal()
@@ -580,7 +582,7 @@ class WorkbenchView extends ItemView {
     action.addEventListener('click', () => { void this.openFile(file); });
   }
 
-  renderResearchDatabasePage() {
+  _renderResearchDatabasePage() {
     this.renderPageHeader('科研数据库', '任务、实验和科研文件的统一索引', {
       label: '+ 新增任务',
       onClick: () => this.openTaskModal()
@@ -697,7 +699,7 @@ class WorkbenchView extends ItemView {
     });
   }
 
-  renderDataPage() {
+  _renderDataPage() {
     this.renderPageHeader('数据资产', '原始数据位置与派生索引', { label: '+ 新增数据资产', onClick: () => this.openDataAssetModal() });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
     const assets = this.entityStore.listDataAssets().filter((item) => !this.searchQuery || `${item.title} ${item.assetType} ${item.dataPath} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
@@ -707,7 +709,7 @@ class WorkbenchView extends ItemView {
     if (!assets.length && !legacy.length) card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配数据资产' : '暂无数据资产' });
   }
 
-  renderNmrInboxPage() {
+  _renderNmrInboxPage() {
     this.renderPageHeader('待解核磁', '勾选后预检；确认前不会移动任何原始数据', {
       label: `归档已选 (${this.selectedNmrPaths.size})`,
       disabled: this.selectedNmrPaths.size === 0,

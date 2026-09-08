@@ -1,6 +1,6 @@
 # Obsidian 科研工作台 / Research Workbench
 
-一个本地优先的 Obsidian 科研信息系统，当前版本为 `v0.4.0` Research Entity Layer。
+一个本地优先的 Obsidian 科研信息系统，当前版本为 `v0.4.1` Research Entity Layer Final Closure。
 
 ## 架构原则
 
@@ -10,6 +10,8 @@
 - 新建任务和实验带有永久 `record_id`；旧笔记使用明确标记的 `LEGACY-*` 路径派生 ID。
 - 课题、实验、化合物和数据资产通过永久 ID 建立关系；支持旧记录永久 ID 迁移和关系完整性检查。
 - NMR 归档成功后自动登记为 `data-asset`，可选关联课题、实验和化合物。
+- 关系完整性检查会报告缺失目标、类型错误、旧 ID、重复 ID、自引用和跨实体关系冲突。
+- 永久 ID 迁移预览显示真实 Legacy ID；迁移只写入缺失的 `record_id`。
 
 ## 功能
 
@@ -20,6 +22,7 @@
 - 插件设置中可配置 NMR 待处理目录、归档目录和启动行为。
 - 当前版本仅支持同一磁盘分区内归档；跨盘移动会在预检阶段拒绝。
 - 本版本不包含 TLC、AI、SQLite 或全局搜索功能。
+- v0.4.1 冻结 Research Entity Layer；后续新能力进入 v0.5.0+。
 
 ## 构建与测试
 

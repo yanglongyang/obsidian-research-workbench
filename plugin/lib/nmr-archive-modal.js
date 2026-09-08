@@ -20,6 +20,7 @@ class NmrArchiveModal extends Modal {
     this.contentEl.createEl('h2', { text: '确认归档核磁原始数据' });
     this.body = this.contentEl.createDiv();
     this.body.createDiv({ cls: 'phdcc-empty', text: '正在检查来源、核种和目标路径…' });
+    this.relationContainer = this.contentEl.createDiv({ cls: 'phdcc-archive-relations' });
     this.renderRelations();
     const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
     const cancel = footer.createEl('button', { text: '取消', type: 'button' });
@@ -33,7 +34,8 @@ class NmrArchiveModal extends Modal {
   renderRelations() {
     const store = this.options.entityStore;
     if (!store) return;
-    const container = this.contentEl.createDiv({ cls: 'phdcc-archive-relations' });
+    const container = this.relationContainer;
+    container.empty();
     container.createEl('h3', { text: '科研关系（可选）' });
     const projects = store.listProjects();
     const experiments = store.listExperiments();
@@ -42,12 +44,30 @@ class NmrArchiveModal extends Modal {
       new Setting(container).setName(label).addDropdown((dropdown) => {
         dropdown.addOption('', '不关联');
         items.forEach((item) => { if (item.id) dropdown.addOption(item.id, `${item.title} · ${item.id}`); });
-        dropdown.onChange((value) => { this.relations[idKey] = value; const item = items.find((candidate) => candidate.id === value); this.relations[key] = item?.title || ''; });
+        dropdown.setValue(this.relations[idKey] || '');
+        dropdown.onChange((value) => {
+          this.relations[idKey] = value;
+          const item = items.find((candidate) => candidate.id === value);
+          this.relations[key] = item?.title || '';
+          if (key === 'project') this.renderRelations();
+          if (key === 'experiment' && item) {
+            if (!this.relations.projectId && item.projectId) { this.relations.projectId = item.projectId; this.relations.project = projects.find((candidate) => candidate.id === item.projectId)?.title || ''; }
+            if (!this.relations.compoundId && item.compoundId) { this.relations.compoundId = item.compoundId; this.relations.compound = compounds.find((candidate) => candidate.id === item.compoundId)?.title || ''; }
+            if (this.relations.projectId && item.projectId && this.relations.projectId !== item.projectId) new Notice('关联实验属于其他课题，请检查选择。');
+            this.renderRelations();
+          }
+          if (key === 'compound' && item) {
+            if (!this.relations.projectId && item.projectId) { this.relations.projectId = item.projectId; this.relations.project = projects.find((candidate) => candidate.id === item.projectId)?.title || ''; this.renderRelations(); }
+            else if (this.relations.projectId && item.projectId && this.relations.projectId !== item.projectId) new Notice('所选化合物属于其他课题，请检查选择。');
+          }
+        });
       });
     };
     add('课题', 'project', projects);
-    add('实验', 'experiment', experiments);
-    add('化合物', 'compound', compounds);
+    const filteredExperiments = this.relations.projectId ? experiments.filter((item) => item.projectId === this.relations.projectId) : experiments;
+    const filteredCompounds = this.relations.projectId ? compounds.filter((item) => item.projectId === this.relations.projectId) : compounds;
+    add('实验', 'experiment', filteredExperiments);
+    add('化合物', 'compound', filteredCompounds);
   }
 
   async prepare() {
