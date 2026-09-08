@@ -944,7 +944,14 @@ class NmrArchiveModal extends Modal {
     this.plans.forEach((plan) => {
       const row = this.body.createDiv({ cls: 'phdcc-file-row' });
       row.createDiv({ cls: 'phdcc-file-title', text: `${plan.nucleus === '1H' ? '¹H 氢谱' : '¹³C 碳谱'} · ${plan.relativeScanPath}` });
-      row.createDiv({ cls: 'phdcc-file-meta', text: `${plan.scanFolder} → ${plan.destinationPath}` });
+      const transfer = row.createDiv({ cls: 'phdcc-archive-transfer' });
+      transfer.createDiv({ cls: 'phdcc-archive-label', text: '来源' });
+      transfer.createDiv({ cls: 'phdcc-archive-path', text: plan.sourcePath });
+      transfer.createDiv({ cls: 'phdcc-archive-arrow', text: '↓ 移动至' });
+      transfer.createDiv({ cls: 'phdcc-archive-label', text: '目标' });
+      transfer.createDiv({ cls: 'phdcc-archive-path', text: plan.destinationPath });
+      const checks = row.createDiv({ cls: 'phdcc-archive-checks' });
+      ['✓ fid 完整', '✓ 核种已识别', '✓ 路径安全', '✓ 同一磁盘', '✓ 目标不存在'].forEach((text) => checks.createSpan({ cls: 'phdcc-badge is-success', text }));
       if (plan.siblingFiles.length) row.createDiv({ cls: 'phdcc-file-next', text: `提示：同级有 ${plan.siblingFiles.length} 个附带文件，不会随原始采集目录移动。` });
     });
     if (this.plans.length && !this.errors.length) this.body.createDiv({ cls: 'phdcc-file-next', text: '确认后将整套移动原始采集目录（含 fid、acqus、pdata）；不会覆盖目标、不会删除空的来源目录。' });
@@ -1268,7 +1275,8 @@ const { PluginSettingTab, Setting, Notice } = require('obsidian');
 const DEFAULT_SETTINGS = {
   openOnStartup: false,
   nmrInboxFolder: '',
-  nmrArchiveFolder: ''
+  nmrArchiveFolder: '',
+  uiState: { activeSection: 'today' }
 };
 
 function mergeSettings(value) {
@@ -1278,7 +1286,10 @@ function mergeSettings(value) {
     ...source,
     openOnStartup: Boolean(source.openOnStartup ?? DEFAULT_SETTINGS.openOnStartup),
     nmrInboxFolder: String(source.nmrInboxFolder ?? DEFAULT_SETTINGS.nmrInboxFolder).trim(),
-    nmrArchiveFolder: String(source.nmrArchiveFolder ?? DEFAULT_SETTINGS.nmrArchiveFolder).trim()
+    nmrArchiveFolder: String(source.nmrArchiveFolder ?? DEFAULT_SETTINGS.nmrArchiveFolder).trim(),
+    uiState: {
+      activeSection: typeof source.uiState?.activeSection === 'string' ? source.uiState.activeSection : DEFAULT_SETTINGS.uiState.activeSection
+    }
   };
 }
 
@@ -1331,6 +1342,53 @@ class ResearchWorkbenchSettingTab extends PluginSettingTab {
 module.exports = { DEFAULT_SETTINGS, mergeSettings, ResearchWorkbenchSettingTab };
 
 },
+"./lib/quick-create-modal": function (module, exports, require) {
+const { Modal, setIcon } = require('obsidian');
+
+class QuickCreateModal extends Modal {
+  constructor(app, options = {}) {
+    super(app);
+    this.options = options;
+  }
+
+  onOpen() {
+    this.modalEl.addClass('phdcc-quick-create-modal');
+    this.contentEl.createEl('h2', { text: '快速新增' });
+    this.contentEl.createDiv({ cls: 'phdcc-modal-subtitle', text: '选择要创建的科研对象' });
+    const options = [
+      ['check-square', '任务', '安排一个需要完成的工作', 'task'],
+      ['test-tube', '实验记录', '记录实验目标、过程和下一步', 'experiment'],
+      ['notebook-pen', '今日复盘', '创建一条复盘任务', 'review']
+    ];
+    const list = this.contentEl.createDiv({ cls: 'phdcc-quick-create-list' });
+    options.forEach(([icon, title, description, type], index) => {
+      const button = list.createEl('button', { cls: 'phdcc-quick-create-option', attr: { type: 'button' } });
+      const iconEl = button.createSpan({ cls: 'phdcc-quick-create-icon' });
+      try { setIcon(iconEl, icon); } catch (error) { iconEl.setText('•'); }
+      const copy = button.createSpan({ cls: 'phdcc-quick-create-copy' });
+      copy.createSpan({ cls: 'phdcc-quick-create-title', text: title });
+      copy.createSpan({ cls: 'phdcc-quick-create-description', text: description });
+      button.addEventListener('click', () => {
+        this.close();
+        if (type === 'task' && typeof this.options.onTask === 'function') this.options.onTask();
+        if (type === 'experiment' && typeof this.options.onExperiment === 'function') this.options.onExperiment();
+        if (type === 'review' && typeof this.options.onReview === 'function') this.options.onReview();
+      });
+      if (index === 0) window.setTimeout(() => button.focus(), 50);
+    });
+    const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
+    const cancel = footer.createEl('button', { text: '取消', attr: { type: 'button' } });
+    cancel.addEventListener('click', () => this.close());
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+module.exports = { QuickCreateModal };
+
+},
 "./lib/view": function (module, exports, require) {
 const { ItemView, Notice, setIcon } = require('obsidian');
 const {
@@ -1349,33 +1407,36 @@ const { TaskModal } = require('./lib/modal');
 const { ExperimentModal } = require('./lib/experiment-modal');
 const { NmrInboxStore } = require('./lib/nmr');
 const { NmrArchiveModal } = require('./lib/nmr-archive-modal');
+const { QuickCreateModal } = require('./lib/quick-create-modal');
 const { ResearchDatabase } = require('./lib/database');
 
 const VIEW_TYPE = 'phd-command-center-view';
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 const PRIORITY_LABEL = { high: '高', medium: '中', low: '低' };
+const EXPERIMENT_STATUS_LABEL = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻' };
+const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'experiments', 'nmr-inbox', 'data', 'literature', 'writing', 'daily-review', 'research-db']);
 
 const NAV_GROUPS = [
-  ['总览与计划', [
+  ['总览', [
     ['overview', '工作台总览', 'layout-dashboard'],
     ['today', '今日待办', 'check-square'],
-    ['calendar', '日历', 'calendar-days'],
-    ['goals', '目标与规划', 'target'],
-    ['reviews', '周月总结', 'rotate-ccw']
+    ['calendar', '日历', 'calendar-days']
   ]],
-  ['科研工作', [
+  ['科研', [
     ['projects', '课题项目', 'flask-conical'],
     ['experiments', '实验记录', 'test-tube'],
-    ['research-db', '科研数据库', 'database'],
-    ['nmr-inbox', '待解核磁', 'scan-line'],
     ['data', '数据资产', 'database'],
+    ['nmr-inbox', '待解核磁', 'scan-line']
+  ]],
+  ['复盘', [
+    ['reviews', '周月总结', 'rotate-ccw'],
+    ['daily-review', '今日复盘', 'notebook-pen']
+  ]],
+  ['资料', [
+    ['research-db', '科研数据库', 'database'],
     ['literature', '文献资料', 'library'],
     ['writing', '写作管线', 'file-pen-line']
   ]],
-  ['成长与复盘', [
-    ['health', '运动健康', 'activity'],
-    ['daily-review', '今日复盘', 'notebook-pen']
-  ]]
 ];
 
 function pad(value) {
@@ -1394,12 +1455,37 @@ function isDone(task) {
   return task.status === 'done';
 }
 
+function formatRelativeDate(value, today = localDate()) {
+  const date = String(value || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return String(value || '');
+  if (date === today) return '今天';
+  const base = new Date(`${today}T00:00:00`);
+  const target = new Date(`${date}T00:00:00`);
+  const days = Math.round((target - base) / 86400000);
+  if (days === 1) return '明天';
+  if (days === -1) return '昨天';
+  if (days < -1) return `逾期 ${Math.abs(days)} 天`;
+  return date.slice(5);
+}
+
+function badgeTone(value, kind = 'status') {
+  if (kind === 'priority') return { high: 'danger', medium: 'warning', low: 'neutral' }[value] || 'neutral';
+  if (kind === 'nmr') return value === 'unknown' || value === 'missing' ? 'warning' : 'info';
+  return { planning: 'neutral', doing: 'info', complete: 'success', blocked: 'danger', todo: 'neutral', done: 'success', deferred: 'warning' }[value] || 'neutral';
+}
+
+function createBadge(container, text, tone = 'neutral') {
+  return container.createSpan({ cls: `phdcc-badge is-${tone}`, text });
+}
+
 class WorkbenchView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
-    this.activeSection = 'today';
+    const savedSection = plugin.settings?.uiState?.activeSection;
+    this.activeSection = VALID_SECTIONS.has(savedSection) ? savedSection : 'today';
     this.searchQuery = '';
+    this.databaseFilters = { type: 'all', status: 'all', project: 'all' };
     this.selectedDate = localDate();
     const today = new Date();
     this.calendarCursor = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-01`;
@@ -1459,6 +1545,12 @@ class WorkbenchView extends ItemView {
     }
   }
 
+  saveUiState() {
+    if (!this.plugin.settings) this.plugin.settings = {};
+    this.plugin.settings.uiState = { ...(this.plugin.settings.uiState || {}), activeSection: this.activeSection };
+    if (typeof this.plugin.saveSettings === 'function') void this.plugin.saveSettings();
+  }
+
   renderShell() {
     const shell = this.root.createDiv({ cls: 'phdcc-shell' });
     this.renderSidebar(shell);
@@ -1483,8 +1575,10 @@ class WorkbenchView extends ItemView {
         try { setIcon(iconEl, icon); } catch (error) { iconEl.setText('•'); }
         item.createSpan({ cls: 'phdcc-nav-text', text: label });
         if (id === 'today') item.createSpan({ cls: 'phdcc-nav-count', text: String(this.tasks.filter((task) => task.due === localDate() && !isDone(task)).length) });
+        if (id === 'nmr-inbox' && this.nmrScans.length) item.createSpan({ cls: 'phdcc-nav-count', text: String(this.nmrScans.length) });
         item.addEventListener('click', () => {
           this.activeSection = id;
+          this.saveUiState();
           if (id === 'today') this.selectedDate = localDate();
           void this.refresh();
         });
@@ -1501,16 +1595,15 @@ class WorkbenchView extends ItemView {
     const searchWrap = topbar.createDiv({ cls: 'phdcc-search' });
     const searchIcon = searchWrap.createSpan({ cls: 'phdcc-search-icon' });
     setIcon(searchIcon, 'search');
-    this.searchInput = searchWrap.createEl('input', { attr: { type: 'search', placeholder: '搜索工作台…' } });
+    this.searchInput = searchWrap.createEl('input', { attr: { type: 'search', placeholder: '搜索当前页面…', 'aria-label': '搜索当前页面' } });
     this.searchInput.value = this.searchQuery;
     this.searchInput.addEventListener('input', (event) => {
       this.searchQuery = event.target.value || '';
       this.renderPage();
     });
-    searchWrap.createSpan({ cls: 'phdcc-key-hint', text: '⌘ K' });
-    const quick = topbar.createEl('button', { cls: 'phdcc-add-btn', text: '+ 快速新增' });
-    quick.addEventListener('click', () => this.openTaskModal());
-    topbar.createDiv({ cls: 'phdcc-avatar', text: 'XY' });
+    searchWrap.createSpan({ cls: 'phdcc-key-hint', text: '⌘/Ctrl K' });
+    const quick = topbar.createEl('button', { cls: 'phdcc-add-btn', text: '+ 快速新增', attr: { type: 'button', 'aria-label': '快速新增' } });
+    quick.addEventListener('click', () => this.openQuickCreate());
   }
 
   renderPage() {
@@ -1519,19 +1612,25 @@ class WorkbenchView extends ItemView {
       overview: () => this.renderOverview(),
       today: () => this.renderToday(),
       calendar: () => this.renderCalendar(),
-      goals: () => this.renderProjectPage('目标与规划'),
       projects: () => this.renderProjectPage('课题项目'),
       reviews: () => this.renderReadOnlyPage('周月总结', PROGRESS_FOLDER, false),
       experiments: () => this.renderExperimentPage(),
       'research-db': () => this.renderResearchDatabasePage(),
       'nmr-inbox': () => this.renderNmrInboxPage(),
-      data: () => this.renderReadOnlyPage('数据资产', DATA_FOLDER, true),
+      data: () => this.renderDataPage(),
       literature: () => this.renderReadOnlyPage('文献资料', LITERATURE_FOLDERS, false),
       writing: () => this.renderReadOnlyPage('写作管线', WRITING_FOLDER, true),
-      health: () => this.renderFocusPage('运动健康', '健康', '记录今天的运动、饮食与身体状态'),
       'daily-review': () => this.renderFocusPage('今日复盘', '复盘', '写下今天最重要的收获与下一步改进')
     }[this.activeSection] || (() => this.renderToday());
     renderer();
+  }
+
+  openQuickCreate() {
+    new QuickCreateModal(this.app, {
+      onTask: () => this.openTaskModal(),
+      onExperiment: () => this.openExperimentModal(),
+      onReview: () => this.openTaskModal({ category: '复盘', due: localDate() })
+    }).open();
   }
 
   openTaskModal(options = {}) {
@@ -1542,6 +1641,7 @@ class WorkbenchView extends ItemView {
         onCreated: async (_file, form) => {
           this.selectedDate = form.due;
           this.activeSection = 'today';
+          this.saveUiState();
           window.setTimeout(() => { void this.refresh(); }, 150);
         }
       }).open();
@@ -1641,6 +1741,8 @@ class WorkbenchView extends ItemView {
         ? addAction
         : { label: '+ 新增任务', onClick: () => this.openTaskModal() };
       const add = row.createEl('button', { cls: 'phdcc-page-add', text: config.label || '+ 新增任务' });
+      if (config.disabled) add.disabled = true;
+      if (config.title) add.setAttr('title', config.title);
       add.addEventListener('click', () => {
         if (typeof config.onClick === 'function') config.onClick();
       });
@@ -1703,9 +1805,9 @@ class WorkbenchView extends ItemView {
     const main = row.createDiv({ cls: 'phdcc-task-main' });
     const title = main.createDiv({ cls: 'phdcc-task-title', text: task.title });
     title.addEventListener('click', () => { void this.openFile(task.file); });
-    const parts = [task.category, formatMinutes(task.estimate), task.due].filter(Boolean);
+    const parts = [task.category, formatMinutes(task.estimate), formatRelativeDate(task.due)].filter(Boolean);
     main.createDiv({ cls: 'phdcc-task-meta', text: parts.join(' · ') });
-    const badge = row.createSpan({ cls: `phdcc-priority-badge is-${task.priority}`, text: PRIORITY_LABEL[task.priority] || '中' });
+    const badge = createBadge(row, PRIORITY_LABEL[task.priority] || '中', badgeTone(task.priority, 'priority'));
     badge.setAttr('aria-label', `优先级${badge.textContent}`);
   }
 
@@ -1720,10 +1822,13 @@ class WorkbenchView extends ItemView {
   }
 
   renderOverview() {
-    this.pageEl.createDiv({ cls: 'phdcc-greeting', text: '今天也向博士目标推进一步' });
+    const todayHeading = this.pageEl.createDiv({ cls: 'phdcc-overview-heading' });
+    todayHeading.createDiv({ cls: 'phdcc-greeting', text: new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date()) });
+    todayHeading.createDiv({ cls: 'phdcc-overview-subtitle', text: '今天 · 先处理最重要的科研动作' });
     this.renderStats(this.pageEl, this.tasks);
+    const todayTasks = this.filteredTasks(this.tasks.filter((task) => task.due === localDate() && !isDone(task)));
+    this.renderTaskList(this.createCard(this.pageEl, '今日优先', '优先处理高价值、已明确的下一步'), todayTasks.slice(0, 3), '今天没有未完成任务');
     const grid = this.pageEl.createDiv({ cls: 'phdcc-overview-grid' });
-    this.renderTaskList(this.createCard(grid, '今日任务'), this.filteredTasks(this.tasks.filter((task) => task.due === localDate())).slice(0, 5), '今日暂无任务');
     this.renderReadOnlyList(this.createCard(grid, '进行中的项目'), this.filteredFiles(this.readOnlyItems(PROJECT_FOLDER, 5, true)), this.searchQuery ? '没有匹配项目' : '暂无项目');
     this.renderReadOnlyList(this.createCard(grid, '最近实验'), this.filteredFiles(this.readOnlyItems(EXPERIMENT_FOLDERS, 5, false)), this.searchQuery ? '没有匹配实验记录' : '暂无实验记录');
     this.renderReadOnlyList(this.createCard(grid, '最近文献'), this.filteredFiles(this.readOnlyItems(LITERATURE_FOLDERS, 5, false)), this.searchQuery ? '没有匹配文献' : '暂无文献');
@@ -1787,8 +1892,35 @@ class WorkbenchView extends ItemView {
       label: '+ 新增实验记录',
       onClick: () => this.openExperimentModal()
     });
-    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
-    this.renderReadOnlyList(card, this.filteredFiles(this.readOnlyItems(EXPERIMENT_FOLDERS, 20, false)), this.searchQuery ? '没有匹配实验记录' : '暂无实验记录');
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-experiment-list' });
+    const files = this.filteredFiles(this.readOnlyItems(EXPERIMENT_FOLDERS, 50, false));
+    if (!files.length) {
+      const empty = card.createDiv({ cls: 'phdcc-empty' });
+      empty.createDiv({ text: this.searchQuery ? '没有匹配实验记录' : '暂无实验记录' });
+      if (!this.searchQuery) {
+        const add = empty.createEl('button', { cls: 'phdcc-empty-add', text: '+ 新增实验记录', attr: { type: 'button' } });
+        add.addEventListener('click', () => this.openExperimentModal());
+      }
+      return;
+    }
+    files.forEach((file) => this.renderExperimentRow(card, file));
+  }
+
+  renderExperimentRow(container, file) {
+    const info = this.fileInfo(file);
+    const row = container.createDiv({ cls: `phdcc-experiment-row${info.status === 'blocked' ? ' is-blocked' : ''}` });
+    const main = row.createDiv({ cls: 'phdcc-experiment-main' });
+    const heading = main.createDiv({ cls: 'phdcc-file-title', text: info.title });
+    heading.addEventListener('click', () => { void this.openFile(file); });
+    const context = [info.project || info.projectId, info.experimentDate && formatRelativeDate(info.experimentDate), info.sample].filter(Boolean);
+    main.createDiv({ cls: 'phdcc-file-meta', text: context.join(' · ') || '未补充课题或样本信息' });
+    if (info.nextAction) main.createDiv({ cls: 'phdcc-file-next', text: `→ 下一步：${info.nextAction}` });
+    if (info.keyResult && info.status === 'blocked') main.createDiv({ cls: 'phdcc-file-next', text: `问题 / 结果：${info.keyResult}` });
+    const side = row.createDiv({ cls: 'phdcc-experiment-side' });
+    createBadge(side, EXPERIMENT_STATUS_LABEL[info.status] || '未设置', badgeTone(info.status));
+    if (info.recordId) side.createDiv({ cls: 'phdcc-record-id', text: info.recordId });
+    const action = side.createEl('button', { cls: 'phdcc-row-action', text: '打开', attr: { type: 'button', title: info.path } });
+    action.addEventListener('click', () => { void this.openFile(file); });
   }
 
   renderResearchDatabasePage() {
@@ -1814,14 +1946,34 @@ class WorkbenchView extends ItemView {
         new Notice(error instanceof Error ? error.message : '科研数据库同步失败');
       }
     });
-    const query = this.searchQuery.trim().toLowerCase();
-    const visible = this.researchDatabase.records.filter((record) => !query || [
-      record.id, record.type, record.title, record.path, record.category,
-      record.project, record.sample, record.status, record.tags.join(' ')
-    ].join(' ').toLowerCase().includes(query));
     const typeLabels = { task: '任务', experiment: '实验', project: '课题', data: '数据', literature: '文献', writing: '写作', progress: '进展', note: '其他' };
     const counts = {};
     this.researchDatabase.records.forEach((record) => { counts[record.type] = (counts[record.type] || 0) + 1; });
+    const filterBar = this.pageEl.createDiv({ cls: 'phdcc-db-filters' });
+    const typeFilter = filterBar.createDiv({ cls: 'phdcc-db-type-filters' });
+    [['all', '全部'], ...Object.entries(typeLabels).filter(([type]) => counts[type]).map(([type, label]) => [type, label])].forEach(([type, label]) => {
+      const button = typeFilter.createEl('button', { cls: `phdcc-filter-chip${this.databaseFilters.type === type ? ' is-active' : ''}`, text: `${label}${type === 'all' ? ` ${this.researchDatabase.records.length}` : ` ${counts[type] || 0}`}`, attr: { type: 'button' } });
+      button.addEventListener('click', () => { this.databaseFilters.type = type; this.renderPage(); });
+    });
+    const statusSelect = filterBar.createEl('select', { cls: 'phdcc-filter-select', attr: { 'aria-label': '按状态筛选' } });
+    statusSelect.createEl('option', { text: '状态：全部', attr: { value: 'all' } });
+    [...new Set(this.researchDatabase.records.map((record) => record.status).filter(Boolean))].sort().forEach((status) => statusSelect.createEl('option', { text: `状态：${status}`, attr: { value: status } }));
+    statusSelect.value = this.databaseFilters.status;
+    statusSelect.addEventListener('change', () => { this.databaseFilters.status = statusSelect.value; this.renderPage(); });
+    const projectSelect = filterBar.createEl('select', { cls: 'phdcc-filter-select', attr: { 'aria-label': '按课题筛选' } });
+    projectSelect.createEl('option', { text: '课题：全部', attr: { value: 'all' } });
+    [...new Set(this.researchDatabase.records.map((record) => record.projectId || record.project).filter(Boolean))].sort().forEach((project) => projectSelect.createEl('option', { text: `课题：${project}`, attr: { value: project } }));
+    projectSelect.value = this.databaseFilters.project;
+    projectSelect.addEventListener('change', () => { this.databaseFilters.project = projectSelect.value; this.renderPage(); });
+    const query = this.searchQuery.trim().toLowerCase();
+    const visible = this.researchDatabase.records.filter((record) => {
+      const matchesType = this.databaseFilters.type === 'all' || record.type === this.databaseFilters.type;
+      const matchesStatus = this.databaseFilters.status === 'all' || record.status === this.databaseFilters.status;
+      const project = record.projectId || record.project;
+      const matchesProject = this.databaseFilters.project === 'all' || project === this.databaseFilters.project;
+      const matchesQuery = !query || [record.id, record.type, record.title, record.path, record.category, record.project, record.projectId, record.compoundId, record.sample, record.status, record.tags.join(' ')].join(' ').toLowerCase().includes(query);
+      return matchesType && matchesStatus && matchesProject && matchesQuery;
+    });
     const stats = this.pageEl.createDiv({ cls: 'phdcc-stats' });
     [['总记录', this.researchDatabase.records.length], ...Object.entries(counts).map(([type, count]) => [typeLabels[type] || type, count])]
       .slice(0, 6)
@@ -1836,11 +1988,9 @@ class WorkbenchView extends ItemView {
       return;
     }
     if (this.researchDatabase.duplicateIds?.length) {
-      const warning = card.createDiv({ cls: 'phdcc-db-warning' });
-      warning.createDiv({ text: `⚠ 发现 ${this.researchDatabase.duplicateIds.length} 个重复永久 ID` });
-      this.researchDatabase.duplicateIds.forEach((duplicate) => {
-        warning.createDiv({ cls: 'phdcc-file-meta', text: `${duplicate.id}：${duplicate.paths.join(' · ')}` });
-      });
+      const warning = card.createEl('details', { cls: 'phdcc-db-warning' });
+      warning.createEl('summary', { text: `⚠ 发现 ${this.researchDatabase.duplicateIds.length} 个重复永久 ID` });
+      this.researchDatabase.duplicateIds.forEach((duplicate) => warning.createDiv({ cls: 'phdcc-file-meta', text: `${duplicate.id}：${duplicate.paths.join(' · ')}` }));
     }
     if (!visible.length) {
       card.createDiv({ cls: 'phdcc-empty', text: query ? '没有匹配的科研记录' : '数据库暂无记录' });
@@ -1854,16 +2004,22 @@ class WorkbenchView extends ItemView {
         if (file) void this.openFile(file);
         else new Notice(`文件不存在：${record.path}`);
       });
-      row.createDiv({ cls: 'phdcc-file-meta', text: `${typeLabels[record.type] || record.type} · ${record.category || '未分类'} · ${record.status || '未设置状态'}` });
+      const metadata = row.createDiv({ cls: 'phdcc-db-meta' });
+      createBadge(metadata, typeLabels[record.type] || record.type, 'neutral');
+      if (record.status) createBadge(metadata, record.status, badgeTone(record.status));
+      metadata.createSpan({ cls: 'phdcc-file-meta', text: `${record.project || record.projectId || '未分类'} · ${record.date || '无日期'}` });
       row.createDiv({ cls: 'phdcc-db-path', text: record.path });
+      if (record.id) row.createDiv({ cls: 'phdcc-record-id', text: record.id });
       const actions = row.createDiv({ cls: 'phdcc-db-actions' });
-      const open = actions.createEl('button', { text: '打开笔记', attr: { type: 'button' } });
+      const menu = actions.createEl('details', { cls: 'phdcc-row-menu' });
+      menu.createEl('summary', { text: '⋯', attr: { title: '更多操作' } });
+      const open = menu.createEl('button', { text: '打开笔记', attr: { type: 'button' } });
       open.addEventListener('click', () => {
         const file = this.app.vault.getAbstractFileByPath(record.path);
         if (file) void this.openFile(file);
         else new Notice(`文件不存在：${record.path}`);
       });
-      const copy = actions.createEl('button', { text: '复制路径', attr: { type: 'button' } });
+      const copy = menu.createEl('button', { text: '复制路径', attr: { type: 'button' } });
       copy.addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(record.path);
@@ -1872,12 +2028,27 @@ class WorkbenchView extends ItemView {
           new Notice(`路径：${record.path}`);
         }
       });
+      const copyId = menu.createEl('button', { text: '复制 Record ID', attr: { type: 'button' } });
+      copyId.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(record.id); new Notice('已复制 Record ID'); }
+        catch (error) { new Notice(`Record ID：${record.id}`); }
+      });
     });
+  }
+
+  renderDataPage() {
+    this.renderPageHeader('数据资产', '原始数据位置与派生索引', {
+      label: '打开科研数据库',
+      onClick: () => { this.activeSection = 'research-db'; this.saveUiState(); this.renderPage(); }
+    });
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    this.renderReadOnlyList(card, this.filteredFiles(this.readOnlyItems(DATA_FOLDER, 30, true)), this.searchQuery ? '没有匹配数据资产' : '暂无数据资产');
   }
 
   renderNmrInboxPage() {
     this.renderPageHeader('待解核磁', '勾选后预检；确认前不会移动任何原始数据', {
       label: `归档已选 (${this.selectedNmrPaths.size})`,
+      disabled: this.selectedNmrPaths.size === 0,
       onClick: () => this.openNmrArchiveModal()
     });
     const refresh = this.pageEl.createEl('button', {
@@ -1909,7 +2080,7 @@ class WorkbenchView extends ItemView {
       card.createDiv({ cls: 'phdcc-stat-value', text: value });
     });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
-    const description = card.createDiv({ cls: 'phdcc-file-meta', text: `来源：${this.nmrInboxStore.inboxFolder || '未配置'}　·　未来归档：${this.nmrInboxStore.archiveFolder || '未配置'}` });
+    const description = card.createDiv({ cls: 'phdcc-file-meta', text: `来源：${this.nmrInboxStore.inboxFolder || '未配置'}　·　归档：${this.nmrInboxStore.archiveFolder || '未配置'}　·　选择后确认才会移动原始数据` });
     description.addClass('phdcc-nmr-note');
     if (this.nmrError) {
       card.createDiv({ cls: 'phdcc-empty', text: `读取失败：${this.nmrError}` });
@@ -1925,7 +2096,7 @@ class WorkbenchView extends ItemView {
   }
 
   renderNmrScanRow(container, scan) {
-    const row = container.createDiv({ cls: 'phdcc-file-row' });
+    const row = container.createDiv({ cls: 'phdcc-nmr-row' });
     const checkbox = row.createEl('input', { cls: 'phdcc-task-checkbox', attr: { type: 'checkbox', 'aria-label': `选择 ${scan.relativeScanPath}` } });
     checkbox.checked = this.selectedNmrPaths.has(scan.relativeScanPath);
     checkbox.addEventListener('change', () => {
@@ -1933,21 +2104,16 @@ class WorkbenchView extends ItemView {
       else this.selectedNmrPaths.delete(scan.relativeScanPath);
       this.renderPage();
     });
+    const main = row.createDiv({ cls: 'phdcc-nmr-main' });
     const label = scan.parentPath || scan.relativeScanPath;
-    row.createDiv({ cls: 'phdcc-file-title', text: label });
-    const details = [
-      `采集目录：${scan.relativeScanPath}`,
-      scan.hasFid ? '原始 fid 完整' : '缺少 fid',
-      scan.hasProcessedData ? '含 pdata' : '未发现 pdata',
-      `${scan.fileCount} 个文件 · ${formatBytes(scan.totalBytes)} · ${scan.directoryCount} 个子目录`,
-      new Date(scan.modified).toLocaleString('zh-CN')
-    ];
-    row.createDiv({ cls: 'phdcc-file-meta', text: details.join(' · ') });
-    const spectrumLabel = scan.nucleus === '1H' ? '¹H 氢谱' : scan.nucleus === '13C' ? '¹³C 碳谱' : `待核对：${scan.nucleus}`;
-    row.createSpan({ cls: 'phdcc-file-status', text: spectrumLabel });
+    main.createDiv({ cls: 'phdcc-file-title', text: label });
+    main.createDiv({ cls: 'phdcc-file-meta', text: `${scan.relativeScanPath} · ${formatBytes(scan.totalBytes)} · ${scan.fileCount} 个文件 · ${new Date(scan.modified).toLocaleString('zh-CN')}` });
+    const states = main.createDiv({ cls: 'phdcc-nmr-states' });
+    createBadge(states, scan.nucleus === '1H' ? '¹H NMR' : scan.nucleus === '13C' ? '¹³C NMR' : `待核对 ${scan.nucleus}`, badgeTone(scan.nucleus || 'unknown', 'nmr'));
+    createBadge(states, scan.hasFid ? '✓ fid' : '⛔ 缺少 fid', scan.hasFid ? 'success' : 'danger');
+    createBadge(states, scan.hasProcessedData ? '✓ pdata' : '未发现 pdata', scan.hasProcessedData ? 'success' : 'neutral');
     const open = row.createEl('button', { cls: 'phdcc-nmr-open', text: '打开原始目录', attr: { type: 'button' } });
     open.addEventListener('click', () => { void this.openNmrFolder(scan); });
-    row.createDiv({ cls: 'phdcc-file-next', text: '状态：待解析；当前页面仅扫描，不执行归档。' });
   }
 
   renderReadOnlyPage(title, folders, excludeReadme) {
@@ -1968,10 +2134,17 @@ class WorkbenchView extends ItemView {
     const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
     return {
       title: String(frontmatter.title || file.basename),
+      recordId: String(frontmatter.record_id || ''),
       status: frontmatter.status ? String(frontmatter.status) : '',
+      project: String(frontmatter.project || ''),
+      projectId: String(frontmatter.project_id || ''),
+      experimentDate: String(frontmatter.experiment_date || frontmatter.date || ''),
+      experimentType: String(frontmatter.experiment_type || ''),
+      sample: String(frontmatter.sample || ''),
+      keyResult: String(frontmatter.key_result || ''),
       priority: frontmatter.priority ? String(frontmatter.priority) : '',
       stage: frontmatter.stage ? String(frontmatter.stage) : '',
-      nextAction: frontmatter.next_action ? String(frontmatter.next_action) : '',
+      nextAction: frontmatter.next_action || frontmatter.nextAction ? String(frontmatter.next_action || frontmatter.nextAction) : '',
       tags: Array.isArray(frontmatter.tags) ? frontmatter.tags.join(' ') : String(frontmatter.tags || ''),
       path: file.path,
       date: new Date(file.stat.mtime).toLocaleDateString('zh-CN')
@@ -2009,7 +2182,7 @@ class WorkbenchView extends ItemView {
   }
 }
 
-module.exports = { VIEW_TYPE, WorkbenchView };
+module.exports = { VIEW_TYPE, WorkbenchView, formatRelativeDate, badgeTone, VALID_SECTIONS };
 
 },
 "./main": function (module, exports, require) {
@@ -2033,6 +2206,16 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
       id: 'open-phd-command-center',
       name: '打开科研工作台',
       callback: () => { void this.activateView(); }
+    });
+
+    this.addCommand({
+      id: 'quick-create',
+      name: '科研工作台：快速新增',
+      callback: () => {
+        const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+        if (leaf?.view instanceof WorkbenchView) leaf.view.openQuickCreate();
+        else void this.activateView();
+      }
     });
 
     this.addSettingTab(new ResearchWorkbenchSettingTab(this.app, this));

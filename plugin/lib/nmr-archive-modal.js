@@ -53,7 +53,14 @@ class NmrArchiveModal extends Modal {
     this.plans.forEach((plan) => {
       const row = this.body.createDiv({ cls: 'phdcc-file-row' });
       row.createDiv({ cls: 'phdcc-file-title', text: `${plan.nucleus === '1H' ? '¹H 氢谱' : '¹³C 碳谱'} · ${plan.relativeScanPath}` });
-      row.createDiv({ cls: 'phdcc-file-meta', text: `${plan.scanFolder} → ${plan.destinationPath}` });
+      const transfer = row.createDiv({ cls: 'phdcc-archive-transfer' });
+      transfer.createDiv({ cls: 'phdcc-archive-label', text: '来源' });
+      transfer.createDiv({ cls: 'phdcc-archive-path', text: plan.sourcePath });
+      transfer.createDiv({ cls: 'phdcc-archive-arrow', text: '↓ 移动至' });
+      transfer.createDiv({ cls: 'phdcc-archive-label', text: '目标' });
+      transfer.createDiv({ cls: 'phdcc-archive-path', text: plan.destinationPath });
+      const checks = row.createDiv({ cls: 'phdcc-archive-checks' });
+      ['✓ fid 完整', '✓ 核种已识别', '✓ 路径安全', '✓ 同一磁盘', '✓ 目标不存在'].forEach((text) => checks.createSpan({ cls: 'phdcc-badge is-success', text }));
       if (plan.siblingFiles.length) row.createDiv({ cls: 'phdcc-file-next', text: `提示：同级有 ${plan.siblingFiles.length} 个附带文件，不会随原始采集目录移动。` });
     });
     if (this.plans.length && !this.errors.length) this.body.createDiv({ cls: 'phdcc-file-next', text: '确认后将整套移动原始采集目录（含 fid、acqus、pdata）；不会覆盖目标、不会删除空的来源目录。' });

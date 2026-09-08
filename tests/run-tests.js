@@ -6,13 +6,22 @@ const Module = require('module');
 
 const originalLoad = Module._load;
 Module._load = function patchedLoad(request, parent, isMain) {
-  if (request === 'obsidian') return { TFile: class TFile {}, normalizePath: (value) => String(value || '').replace(/\\/g, '/') };
+  if (request === 'obsidian') return {
+    TFile: class TFile {},
+    ItemView: class ItemView { constructor(leaf) { this.leaf = leaf; } },
+    Modal: class Modal {},
+    Notice: class Notice {},
+    Setting: class Setting {},
+    setIcon: () => {},
+    normalizePath: (value) => String(value || '').replace(/\\/g, '/')
+  };
   return originalLoad.call(this, request, parent, isMain);
 };
 
 const data = require('../plugin/lib/data');
 const database = require('../plugin/lib/database');
 const nmr = require('../plugin/lib/nmr');
+const ui = require('../plugin/lib/view');
 Module._load = originalLoad;
 
 const tests = [];
@@ -98,6 +107,17 @@ test('NMR batch status distinguishes complete, partial and failed', () => {
   assert.strictEqual(nmr.archiveBatchStatus(3, 0), 'completed');
   assert.strictEqual(nmr.archiveBatchStatus(2, 1), 'partial_failure');
   assert.strictEqual(nmr.archiveBatchStatus(0, 2), 'failed');
+});
+
+test('UI helpers format relative dates and status tones', () => {
+  assert.strictEqual(ui.formatRelativeDate('2026-09-09', '2026-09-09'), '今天');
+  assert.strictEqual(ui.formatRelativeDate('2026-09-10', '2026-09-09'), '明天');
+  assert.strictEqual(ui.formatRelativeDate('2026-09-08', '2026-09-09'), '昨天');
+  assert.strictEqual(ui.formatRelativeDate('2026-09-01', '2026-09-09'), '逾期 8 天');
+  assert.strictEqual(ui.badgeTone('high', 'priority'), 'danger');
+  assert.strictEqual(ui.badgeTone('blocked'), 'danger');
+  assert.strictEqual(ui.badgeTone('unknown', 'nmr'), 'warning');
+  assert.strictEqual(ui.VALID_SECTIONS.has('nmr-inbox'), true);
 });
 
 test('experiment path sanitizes titles and avoids collisions', () => {

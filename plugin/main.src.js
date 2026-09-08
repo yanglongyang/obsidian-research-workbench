@@ -20,6 +20,16 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
       callback: () => { void this.activateView(); }
     });
 
+    this.addCommand({
+      id: 'quick-create',
+      name: '科研工作台：快速新增',
+      callback: () => {
+        const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+        if (leaf?.view instanceof WorkbenchView) leaf.view.openQuickCreate();
+        else void this.activateView();
+      }
+    });
+
     this.addSettingTab(new ResearchWorkbenchSettingTab(this.app, this));
 
     const scheduleRefresh = (file, oldPath) => {

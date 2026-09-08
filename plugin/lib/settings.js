@@ -3,7 +3,8 @@ const { PluginSettingTab, Setting, Notice } = require('obsidian');
 const DEFAULT_SETTINGS = {
   openOnStartup: false,
   nmrInboxFolder: '',
-  nmrArchiveFolder: ''
+  nmrArchiveFolder: '',
+  uiState: { activeSection: 'today' }
 };
 
 function mergeSettings(value) {
@@ -13,7 +14,10 @@ function mergeSettings(value) {
     ...source,
     openOnStartup: Boolean(source.openOnStartup ?? DEFAULT_SETTINGS.openOnStartup),
     nmrInboxFolder: String(source.nmrInboxFolder ?? DEFAULT_SETTINGS.nmrInboxFolder).trim(),
-    nmrArchiveFolder: String(source.nmrArchiveFolder ?? DEFAULT_SETTINGS.nmrArchiveFolder).trim()
+    nmrArchiveFolder: String(source.nmrArchiveFolder ?? DEFAULT_SETTINGS.nmrArchiveFolder).trim(),
+    uiState: {
+      activeSection: typeof source.uiState?.activeSection === 'string' ? source.uiState.activeSection : DEFAULT_SETTINGS.uiState.activeSection
+    }
   };
 }
 

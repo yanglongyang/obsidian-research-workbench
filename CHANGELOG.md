@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0 — UI Refinement
+
+### Added
+
+- Quick Create：任务、实验记录和今日复盘入口。
+- 科研数据库类型、状态和课题筛选。
+- 统一状态/优先级/NMR badge，以及重复 ID 折叠警告。
+- activeSection 页面状态持久化。
+
+### Changed
+
+- 精简 Sidebar 信息架构并移除无功能头像。
+- 概览改为紧凑 KPI 和今日优先任务。
+- 实验记录改为结构化状态、课题、日期和下一步列表。
+- NMR 改为处理队列式行，并在归档确认中展示来源、目标和安全检查。
+- 搜索 placeholder 改为“搜索当前页面…”，与实际行为一致。
+
 ## 0.2.1 — Data Foundation Final Closure
 
 ### Added
