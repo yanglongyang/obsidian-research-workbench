@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0 — Research Entity Layer
+
+### Added
+
+- 课题、化合物、数据资产实体及其 Markdown 文件入口。
+- 永久 ID 迁移、关系完整性检查和重复/缺失/错误类型/旧 ID/自引用诊断。
+- NMR 归档后自动登记 `data-asset`，支持关联课题、实验和化合物。
+- Quick Create 新增课题、化合物和数据资产入口。
+
+### Scope
+
+- 本版本明确排除 TLC、AI、SQLite、移动端核心和全局搜索。
+
 ## 0.3.1 — UI Closure
 
 ### Fixed

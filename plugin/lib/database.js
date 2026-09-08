@@ -2,7 +2,7 @@ const DB_FOLDER = '00-博士工作台/应用数据/数据库';
 const DB_FILE = `${DB_FOLDER}/records.json`;
 const AUDIT_FOLDER = '00-博士工作台/应用数据/审计';
 const AUDIT_FILE = `${AUDIT_FOLDER}/nmr-archive.jsonl`;
-const DATABASE_SCHEMA_VERSION = 2;
+const DATABASE_SCHEMA_VERSION = 3;
 const MANAGED_FOLDERS = ['00-博士工作台', '实验记录', '文献', '文献阅读', 'DMAC_AIE_PET_调研'];
 
 function normalizePath(value) {
@@ -64,6 +64,9 @@ function firstArray(value) {
 function recordType(filePath, frontmatter) {
   const path = normalizePath(filePath);
   if (frontmatter?.kind === 'workbench-task') return 'task';
+  if (frontmatter?.kind === 'project') return 'project';
+  if (frontmatter?.kind === 'compound') return 'compound';
+  if (frontmatter?.kind === 'data-asset') return 'data-asset';
   if (frontmatter?.kind === 'experiment' || pathInside(path, '00-博士工作台/03-实验') || pathInside(path, '实验记录')) return 'experiment';
   if (pathInside(path, '00-博士工作台/02-课题')) return 'project';
   if (pathInside(path, '00-博士工作台/04-数据')) return 'data';
@@ -71,6 +74,37 @@ function recordType(filePath, frontmatter) {
   if (pathInside(path, '00-博士工作台/06-写作')) return 'writing';
   if (pathInside(path, '00-博士工作台/07-进展')) return 'progress';
   return pathInside(path, '00-博士工作台') ? 'note' : '';
+}
+
+const RELATION_RULES = {
+  experiment: { projectId: 'project', compoundId: 'compound' },
+  compound: { projectId: 'project' },
+  'data-asset': { projectId: 'project', experimentId: 'experiment', compoundId: 'compound' }
+};
+
+function validateRelationships(records) {
+  const list = Array.isArray(records) ? records : [];
+  const byId = new Map();
+  list.forEach((record) => { if (record?.id) { if (!byId.has(record.id)) byId.set(record.id, []); byId.get(record.id).push(record); } });
+  const issues = [];
+  const duplicateIds = [...byId.entries()].filter(([, matches]) => matches.length > 1);
+  duplicateIds.forEach(([id, matches]) => matches.forEach((source) => issues.push({ type: 'duplicate_record_id', sourcePath: source.path, sourceId: source.id, field: 'record_id', targetId: id, message: `record_id 重复：${id}` })));
+  let validRelationCount = 0;
+  list.forEach((source) => {
+    const rules = RELATION_RULES[source.type] || {};
+    Object.entries(rules).forEach(([field, expectedType]) => {
+      const targetId = String(source[field] || '').trim();
+      if (!targetId) return;
+      if (targetId === source.id) { issues.push({ type: 'self_reference', sourcePath: source.path, sourceId: source.id, field, targetId, message: `${field} 不能指向自身` }); return; }
+      if (targetId.startsWith('LEGACY-')) { issues.push({ type: 'legacy_reference', sourcePath: source.path, sourceId: source.id, field, targetId, message: `${field} 仍引用旧路径 ID` }); return; }
+      const matches = byId.get(targetId) || [];
+      if (!matches.length) { issues.push({ type: 'missing_target', sourcePath: source.path, sourceId: source.id, field, targetId, message: `${field} 目标不存在：${targetId}` }); return; }
+      if (matches.length > 1) { issues.push({ type: 'duplicate_record_id', sourcePath: source.path, sourceId: source.id, field, targetId, message: `目标 ID 重复：${targetId}` }); return; }
+      if (matches[0].type !== expectedType) { issues.push({ type: 'wrong_target_type', sourcePath: source.path, sourceId: source.id, field, targetId, expectedType, actualType: matches[0].type, message: `${field} 目标类型应为 ${expectedType}` }); return; }
+      validRelationCount += 1;
+    });
+  });
+  return { issues, validRelationCount };
 }
 
 function identityFor(filePath, frontmatter, type) {
@@ -131,11 +165,15 @@ class ResearchDatabase {
         project: firstString(frontmatter.project),
         projectId: firstString(frontmatter.project_id),
         compoundId: firstString(frontmatter.compound_id),
+        experimentId: firstString(frontmatter.experiment_id),
         dataAssetId: firstString(frontmatter.data_asset_id),
         parentId: firstString(frontmatter.parent_id),
         relatedIds: firstArray(frontmatter.related_ids),
         sample: firstString(frontmatter.sample),
         dataPath: firstString(frontmatter.data_path),
+        assetType: firstString(frontmatter.asset_type),
+        compoundCode: firstString(frontmatter.compound_code),
+        acquiredAt: firstString(frontmatter.acquired_at),
         tags: frontmatterTags(frontmatter),
         updated: firstString(frontmatter.updated) || new Date(file.stat.mtime).toISOString(),
         size: file.stat.size
@@ -146,6 +184,8 @@ class ResearchDatabase {
 
   async sync() {
     this.error = '';
+    this.relationshipIssues = [];
+    this.validRelationCount = 0;
     try {
       await this.ensureFolder();
       const records = this.collectRecords();
@@ -163,6 +203,9 @@ class ResearchDatabase {
         }
       }
       this.duplicateIds = findDuplicateIds(records);
+      const integrity = validateRelationships(records);
+      this.relationshipIssues = integrity.issues;
+      this.validRelationCount = integrity.validRelationCount;
       this.records = records;
       this.lastSync = new Date().toISOString();
       return records;
@@ -191,6 +234,7 @@ module.exports = {
   isDerivedPath,
   affectsManagedPath,
   findDuplicateIds,
+  validateRelationships,
   simpleHash,
   recordType,
   identityFor,

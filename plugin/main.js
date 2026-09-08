@@ -168,8 +168,10 @@ function renderExperimentContent(experiment) {
     'kind: experiment',
     `experiment_type: ${yamlString(experiment.experimentType)}`,
     `project_id: ${yamlString(experiment.projectId)}`,
+    `compound_id: ${yamlString(experiment.compoundId)}`,
     `title: ${yamlString(experiment.title)}`,
     `project: ${yamlString(experiment.project)}`,
+    `compound: ${yamlString(experiment.compound)}`,
     `status: ${yamlString(experiment.status)}`,
     `experiment_date: ${yamlString(experiment.experimentDate)}`,
     `sample: ${yamlString(experiment.sample)}`,
@@ -284,10 +286,12 @@ class TaskStore {
       recordId: generateRecordId('EXP'),
       experimentType: String(input.experimentType || 'general').trim() || 'general',
       projectId: String(input.projectId || '').trim(),
+      compoundId: String(input.compoundId || '').trim(),
       title,
       experimentDate,
       status,
       project: String(input.project || '').trim(),
+      compound: String(input.compound || '').trim(),
       sample: String(input.sample || '').trim(),
       objective: String(input.objective || '').trim(),
       protocol: String(input.protocol || '').trim(),
@@ -352,7 +356,7 @@ const DB_FOLDER = '00-博士工作台/应用数据/数据库';
 const DB_FILE = `${DB_FOLDER}/records.json`;
 const AUDIT_FOLDER = '00-博士工作台/应用数据/审计';
 const AUDIT_FILE = `${AUDIT_FOLDER}/nmr-archive.jsonl`;
-const DATABASE_SCHEMA_VERSION = 2;
+const DATABASE_SCHEMA_VERSION = 3;
 const MANAGED_FOLDERS = ['00-博士工作台', '实验记录', '文献', '文献阅读', 'DMAC_AIE_PET_调研'];
 
 function normalizePath(value) {
@@ -414,6 +418,9 @@ function firstArray(value) {
 function recordType(filePath, frontmatter) {
   const path = normalizePath(filePath);
   if (frontmatter?.kind === 'workbench-task') return 'task';
+  if (frontmatter?.kind === 'project') return 'project';
+  if (frontmatter?.kind === 'compound') return 'compound';
+  if (frontmatter?.kind === 'data-asset') return 'data-asset';
   if (frontmatter?.kind === 'experiment' || pathInside(path, '00-博士工作台/03-实验') || pathInside(path, '实验记录')) return 'experiment';
   if (pathInside(path, '00-博士工作台/02-课题')) return 'project';
   if (pathInside(path, '00-博士工作台/04-数据')) return 'data';
@@ -421,6 +428,37 @@ function recordType(filePath, frontmatter) {
   if (pathInside(path, '00-博士工作台/06-写作')) return 'writing';
   if (pathInside(path, '00-博士工作台/07-进展')) return 'progress';
   return pathInside(path, '00-博士工作台') ? 'note' : '';
+}
+
+const RELATION_RULES = {
+  experiment: { projectId: 'project', compoundId: 'compound' },
+  compound: { projectId: 'project' },
+  'data-asset': { projectId: 'project', experimentId: 'experiment', compoundId: 'compound' }
+};
+
+function validateRelationships(records) {
+  const list = Array.isArray(records) ? records : [];
+  const byId = new Map();
+  list.forEach((record) => { if (record?.id) { if (!byId.has(record.id)) byId.set(record.id, []); byId.get(record.id).push(record); } });
+  const issues = [];
+  const duplicateIds = [...byId.entries()].filter(([, matches]) => matches.length > 1);
+  duplicateIds.forEach(([id, matches]) => matches.forEach((source) => issues.push({ type: 'duplicate_record_id', sourcePath: source.path, sourceId: source.id, field: 'record_id', targetId: id, message: `record_id 重复：${id}` })));
+  let validRelationCount = 0;
+  list.forEach((source) => {
+    const rules = RELATION_RULES[source.type] || {};
+    Object.entries(rules).forEach(([field, expectedType]) => {
+      const targetId = String(source[field] || '').trim();
+      if (!targetId) return;
+      if (targetId === source.id) { issues.push({ type: 'self_reference', sourcePath: source.path, sourceId: source.id, field, targetId, message: `${field} 不能指向自身` }); return; }
+      if (targetId.startsWith('LEGACY-')) { issues.push({ type: 'legacy_reference', sourcePath: source.path, sourceId: source.id, field, targetId, message: `${field} 仍引用旧路径 ID` }); return; }
+      const matches = byId.get(targetId) || [];
+      if (!matches.length) { issues.push({ type: 'missing_target', sourcePath: source.path, sourceId: source.id, field, targetId, message: `${field} 目标不存在：${targetId}` }); return; }
+      if (matches.length > 1) { issues.push({ type: 'duplicate_record_id', sourcePath: source.path, sourceId: source.id, field, targetId, message: `目标 ID 重复：${targetId}` }); return; }
+      if (matches[0].type !== expectedType) { issues.push({ type: 'wrong_target_type', sourcePath: source.path, sourceId: source.id, field, targetId, expectedType, actualType: matches[0].type, message: `${field} 目标类型应为 ${expectedType}` }); return; }
+      validRelationCount += 1;
+    });
+  });
+  return { issues, validRelationCount };
 }
 
 function identityFor(filePath, frontmatter, type) {
@@ -481,11 +519,15 @@ class ResearchDatabase {
         project: firstString(frontmatter.project),
         projectId: firstString(frontmatter.project_id),
         compoundId: firstString(frontmatter.compound_id),
+        experimentId: firstString(frontmatter.experiment_id),
         dataAssetId: firstString(frontmatter.data_asset_id),
         parentId: firstString(frontmatter.parent_id),
         relatedIds: firstArray(frontmatter.related_ids),
         sample: firstString(frontmatter.sample),
         dataPath: firstString(frontmatter.data_path),
+        assetType: firstString(frontmatter.asset_type),
+        compoundCode: firstString(frontmatter.compound_code),
+        acquiredAt: firstString(frontmatter.acquired_at),
         tags: frontmatterTags(frontmatter),
         updated: firstString(frontmatter.updated) || new Date(file.stat.mtime).toISOString(),
         size: file.stat.size
@@ -496,6 +538,8 @@ class ResearchDatabase {
 
   async sync() {
     this.error = '';
+    this.relationshipIssues = [];
+    this.validRelationCount = 0;
     try {
       await this.ensureFolder();
       const records = this.collectRecords();
@@ -513,6 +557,9 @@ class ResearchDatabase {
         }
       }
       this.duplicateIds = findDuplicateIds(records);
+      const integrity = validateRelationships(records);
+      this.relationshipIssues = integrity.issues;
+      this.validRelationCount = integrity.validRelationCount;
       this.records = records;
       this.lastSync = new Date().toISOString();
       return records;
@@ -541,11 +588,320 @@ module.exports = {
   isDerivedPath,
   affectsManagedPath,
   findDuplicateIds,
+  validateRelationships,
   simpleHash,
   recordType,
   identityFor,
   ResearchDatabase
 };
+
+},
+"./lib/entities/project": function (module, exports, require) {
+const PROJECT_ENTITY_FOLDER = '00-博士工作台/02-课题';
+
+function yamlString(value) { return JSON.stringify(String(value ?? '')); }
+
+function sanitizeSegment(value) {
+  const clean = String(value || '').replace(/[<>:"/\\|?*]/g, '').replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, 64);
+  return clean || 'project';
+}
+
+async function ensureFolder(vault, folder) {
+  let current = '';
+  for (const segment of folder.split('/')) {
+    current = current ? `${current}/${segment}` : segment;
+    if (vault.getAbstractFileByPath(current)) continue;
+    try { await vault.createFolder(current); } catch (error) {
+      if (!vault.getAbstractFileByPath(current)) throw error;
+    }
+  }
+}
+
+function buildProjectPath(vault, title) {
+  const segment = sanitizeSegment(title);
+  let suffix = 1;
+  let candidate = '';
+  do {
+    candidate = `${PROJECT_ENTITY_FOLDER}/${segment}${suffix === 1 ? '' : `-${suffix}`}.md`;
+    suffix += 1;
+  } while (vault.getAbstractFileByPath(candidate));
+  return candidate;
+}
+
+function renderProjectContent(project) {
+  return [
+    '---',
+    `record_id: ${yamlString(project.recordId)}`,
+    'kind: project',
+    `title: ${yamlString(project.title)}`,
+    `status: ${yamlString(project.status || 'active')}`,
+    `description: ${yamlString(project.description)}`,
+    `stage: ${yamlString(project.stage)}`,
+    `next_action: ${yamlString(project.nextAction)}`,
+    `created: ${yamlString(project.created)}`,
+    `updated: ${yamlString(project.updated)}`,
+    'tags:',
+    '  - research/project',
+    '---',
+    `# ${project.title}`,
+    '',
+    '## 目标与范围',
+    '',
+    project.description || '',
+    '',
+    '## 下一步',
+    '',
+    project.nextAction || '',
+    ''
+  ].join('\n');
+}
+
+async function createProject(app, input, generateRecordId) {
+  const title = String(input?.title || '').trim();
+  if (!title) throw new Error('请输入课题名称');
+  await ensureFolder(app.vault, PROJECT_ENTITY_FOLDER);
+  const now = new Date().toISOString();
+  const project = { recordId: generateRecordId('PROJ'), title, status: String(input.status || 'active'), description: String(input.description || '').trim(), stage: String(input.stage || '').trim(), nextAction: String(input.nextAction || '').trim(), created: now, updated: now };
+  return app.vault.create(buildProjectPath(app.vault, title), renderProjectContent(project));
+}
+
+module.exports = { PROJECT_ENTITY_FOLDER, buildProjectPath, renderProjectContent, createProject };
+
+},
+"./lib/entities/compound": function (module, exports, require) {
+const COMPOUND_FOLDER = '00-博士工作台/04-化合物';
+
+function yamlString(value) { return JSON.stringify(String(value ?? '')); }
+function sanitizeSegment(value) {
+  const clean = String(value || '').replace(/[<>:"/\\|?*]/g, '').replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, 64);
+  return clean || 'compound';
+}
+async function ensureFolder(vault, folder) {
+  let current = '';
+  for (const segment of folder.split('/')) {
+    current = current ? `${current}/${segment}` : segment;
+    if (vault.getAbstractFileByPath(current)) continue;
+    try { await vault.createFolder(current); } catch (error) { if (!vault.getAbstractFileByPath(current)) throw error; }
+  }
+}
+function buildCompoundPath(vault, code) {
+  const segment = sanitizeSegment(code);
+  let suffix = 1;
+  let candidate = '';
+  do { candidate = `${COMPOUND_FOLDER}/${segment}${suffix === 1 ? '' : `-${suffix}`}.md`; suffix += 1; } while (vault.getAbstractFileByPath(candidate));
+  return candidate;
+}
+function renderCompoundContent(compound) {
+  return [
+    '---',
+    `record_id: ${yamlString(compound.recordId)}`,
+    'kind: compound',
+    `compound_code: ${yamlString(compound.compoundCode)}`,
+    `title: ${yamlString(compound.name || compound.compoundCode)}`,
+    `name: ${yamlString(compound.name)}`,
+    `project_id: ${yamlString(compound.projectId)}`,
+    `project: ${yamlString(compound.project)}`,
+    `smiles: ${yamlString(compound.smiles)}`,
+    `formula: ${yamlString(compound.formula)}`,
+    `molecular_weight: ${yamlString(compound.molecularWeight)}`,
+    `status: ${yamlString(compound.status || 'active')}`,
+    `created: ${yamlString(compound.created)}`,
+    `updated: ${yamlString(compound.updated)}`,
+    'tags:',
+    '  - research/compound',
+    '---',
+    `# ${compound.name || compound.compoundCode}`,
+    '',
+    '## 基本信息',
+    '',
+    `化合物编号：${compound.compoundCode}`,
+    '',
+    '## 设计与用途',
+    '',
+    compound.notes || '',
+    '',
+    '## 合成记录',
+    '',
+    '## 表征',
+    '',
+    ''
+  ].join('\n');
+}
+async function createCompound(app, input, generateRecordId) {
+  const compoundCode = String(input?.compoundCode || '').trim();
+  if (!compoundCode) throw new Error('请输入化合物编号');
+  await ensureFolder(app.vault, COMPOUND_FOLDER);
+  const now = new Date().toISOString();
+  const compound = { recordId: generateRecordId('CMP'), compoundCode, name: String(input.name || '').trim(), projectId: String(input.projectId || '').trim(), project: String(input.project || '').trim(), smiles: String(input.smiles || '').trim(), formula: String(input.formula || '').trim(), molecularWeight: String(input.molecularWeight || '').trim(), status: String(input.status || 'active'), notes: String(input.notes || '').trim(), created: now, updated: now };
+  return app.vault.create(buildCompoundPath(app.vault, compoundCode), renderCompoundContent(compound));
+}
+module.exports = { COMPOUND_FOLDER, buildCompoundPath, renderCompoundContent, createCompound };
+
+},
+"./lib/entities/data-asset": function (module, exports, require) {
+const DATA_ASSET_FOLDER = '00-博士工作台/04-数据资产';
+const ASSET_TYPES = ['nmr', 'hplc', 'ms', 'uvvis', 'fluorescence', 'image', 'orca', 'raw', 'other'];
+
+function yamlString(value) { return JSON.stringify(String(value ?? '')); }
+function sanitizeSegment(value) {
+  const clean = String(value || '').replace(/[<>:"/\\|?*]/g, '').replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, 72);
+  return clean || 'data-asset';
+}
+async function ensureFolder(vault, folder) {
+  let current = '';
+  for (const segment of folder.split('/')) {
+    current = current ? `${current}/${segment}` : segment;
+    if (vault.getAbstractFileByPath(current)) continue;
+    try { await vault.createFolder(current); } catch (error) { if (!vault.getAbstractFileByPath(current)) throw error; }
+  }
+}
+function buildDataAssetPath(vault, title) {
+  const segment = sanitizeSegment(title);
+  let suffix = 1;
+  let candidate = '';
+  do { candidate = `${DATA_ASSET_FOLDER}/${segment}${suffix === 1 ? '' : `-${suffix}`}.md`; suffix += 1; } while (vault.getAbstractFileByPath(candidate));
+  return candidate;
+}
+function renderDataAssetContent(asset) {
+  return [
+    '---',
+    `record_id: ${yamlString(asset.recordId)}`,
+    'kind: data-asset',
+    `title: ${yamlString(asset.title)}`,
+    `asset_type: ${yamlString(asset.assetType)}`,
+    `project_id: ${yamlString(asset.projectId)}`,
+    `project: ${yamlString(asset.project)}`,
+    `experiment_id: ${yamlString(asset.experimentId)}`,
+    `experiment: ${yamlString(asset.experiment)}`,
+    `compound_id: ${yamlString(asset.compoundId)}`,
+    `compound: ${yamlString(asset.compound)}`,
+    `data_path: ${yamlString(asset.dataPath)}`,
+    `acquired_at: ${yamlString(asset.acquiredAt)}`,
+    `status: ${yamlString(asset.status || 'available')}`,
+    `created: ${yamlString(asset.created)}`,
+    `updated: ${yamlString(asset.updated)}`,
+    'tags:',
+    '  - research/data',
+    '---',
+    `# ${asset.title}`,
+    '',
+    '## 数据位置',
+    '',
+    asset.dataPath || '',
+    '',
+    '## 备注',
+    '',
+    asset.notes || '',
+    ''
+  ].join('\n');
+}
+async function createDataAsset(app, input, generateRecordId) {
+  const title = String(input?.title || '').trim();
+  const assetType = String(input?.assetType || '').trim();
+  const dataPath = String(input?.dataPath || '').trim();
+  if (!title) throw new Error('请输入数据资产标题');
+  if (!ASSET_TYPES.includes(assetType)) throw new Error('数据资产类型无效');
+  if (!dataPath) throw new Error('请输入数据路径');
+  await ensureFolder(app.vault, DATA_ASSET_FOLDER);
+  const now = new Date().toISOString();
+  const asset = { recordId: generateRecordId('DATA'), title, assetType, dataPath, projectId: String(input.projectId || '').trim(), project: String(input.project || '').trim(), experimentId: String(input.experimentId || '').trim(), experiment: String(input.experiment || '').trim(), compoundId: String(input.compoundId || '').trim(), compound: String(input.compound || '').trim(), acquiredAt: String(input.acquiredAt || '').trim(), status: String(input.status || 'available'), notes: String(input.notes || '').trim(), created: now, updated: now };
+  const file = await app.vault.create(buildDataAssetPath(app.vault, title), renderDataAssetContent(asset));
+  return { file, asset };
+}
+module.exports = { DATA_ASSET_FOLDER, ASSET_TYPES, buildDataAssetPath, renderDataAssetContent, createDataAsset };
+
+},
+"./lib/entities/store": function (module, exports, require) {
+const { PROJECT_ENTITY_FOLDER } = require('./lib/entities/project');
+const { COMPOUND_FOLDER } = require('./lib/entities/compound');
+const { DATA_ASSET_FOLDER } = require('./lib/entities/data-asset');
+const { EXPERIMENT_FOLDERS } = require('./lib/data');
+
+function text(value) { return typeof value === 'string' ? value.trim() : ''; }
+function inFolder(file, folders) {
+  return folders.some((folder) => file.path === folder || file.path.startsWith(`${folder}/`));
+}
+
+class EntityStore {
+  constructor(plugin) { this.plugin = plugin; this.app = plugin.app; }
+
+  list(kind) {
+    const folders = kind === 'project' ? [PROJECT_ENTITY_FOLDER] : kind === 'compound' ? [COMPOUND_FOLDER] : kind === 'data-asset' ? [DATA_ASSET_FOLDER] : kind === 'experiment' ? EXPERIMENT_FOLDERS : [];
+    return this.app.vault.getMarkdownFiles().map((file) => {
+      const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
+      return { file, frontmatter };
+    }).filter(({ file, frontmatter }) => frontmatter.kind === kind && inFolder(file, folders)).map(({ file, frontmatter }) => ({
+      file,
+      id: text(frontmatter.record_id),
+      title: text(frontmatter.title) || file.basename,
+      projectId: text(frontmatter.project_id),
+      project: text(frontmatter.project),
+      experimentId: text(frontmatter.experiment_id),
+      experiment: text(frontmatter.experiment),
+      compoundId: text(frontmatter.compound_id),
+      compound: text(frontmatter.compound),
+      compoundCode: text(frontmatter.compound_code),
+      assetType: text(frontmatter.asset_type),
+      status: text(frontmatter.status),
+      nextAction: text(frontmatter.next_action || frontmatter.nextAction),
+      date: text(frontmatter.experiment_date || frontmatter.date || frontmatter.acquired_at),
+      dataPath: text(frontmatter.data_path)
+    })).sort((a, b) => a.title.localeCompare(b.title));
+  }
+
+  listProjects() { return this.list('project').filter((item) => item.id); }
+  listExperiments() { return this.list('experiment').filter((item) => item.id); }
+  listCompounds() { return this.list('compound').filter((item) => item.id); }
+  listDataAssets() { return this.list('data-asset').filter((item) => item.id); }
+}
+
+module.exports = { EntityStore };
+
+},
+"./lib/migrations/permanent-id": function (module, exports, require) {
+const { recordType } = require('./lib/database');
+
+const PREFIX_BY_TYPE = { task: 'TASK', experiment: 'EXP', project: 'PROJ' };
+
+class PermanentIdMigration {
+  constructor(plugin, generateRecordId) {
+    this.plugin = plugin;
+    this.app = plugin.app;
+    this.generateRecordId = generateRecordId;
+  }
+
+  scan() {
+    const items = [];
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
+      const type = recordType(file.path, frontmatter);
+      if (!PREFIX_BY_TYPE[type] || String(frontmatter.record_id || '').trim()) continue;
+      items.push({ file, path: file.path, type, currentId: `LEGACY-${type.toUpperCase()}`, proposedId: this.generateRecordId(PREFIX_BY_TYPE[type]), title: String(frontmatter.title || file.basename) });
+    }
+    return items;
+  }
+
+  async apply(items) {
+    const candidates = Array.isArray(items) ? items : [];
+    const migrated = [];
+    const failed = [];
+    for (const item of candidates) {
+      try {
+        if (!item.file || !this.app.vault.getAbstractFileByPath(item.path)) throw new Error('文件不存在，可能已被移动。');
+        await this.app.fileManager.processFrontMatter(item.file, (data) => {
+          if (!data.record_id) data.record_id = item.proposedId;
+        });
+        migrated.push(item);
+      } catch (error) {
+        failed.push({ ...item, error: error instanceof Error ? error.message : String(error) });
+        console.error('[Research Workbench] permanent ID migration failed', error);
+      }
+    }
+    return { status: failed.length ? (migrated.length ? 'partial_failure' : 'failed') : 'completed', migrated, failed, skipped: [] };
+  }
+}
+
+module.exports = { PREFIX_BY_TYPE, PermanentIdMigration };
 
 },
 "./lib/nmr": function (module, exports, require) {
@@ -556,6 +912,8 @@ const NMR_INBOX_FOLDER = '';
 const NMR_ARCHIVE_FOLDER = '';
 const NUCLEUS_ARCHIVE_MAP = { '1H': '氢谱', '13C': '碳谱' };
 const { AUDIT_FOLDER, AUDIT_FILE } = require('./lib/database');
+const { createDataAsset } = require('./lib/entities/data-asset');
+const { generateRecordId } = require('./lib/data');
 
 const { spawn } = require('child_process');
 
@@ -812,7 +1170,7 @@ class NmrInboxStore {
     else await this.app.vault.append(file, line);
   }
 
-  async archiveSelected(relativePaths) {
+  async archiveSelected(relativePaths, relations = {}) {
     const { plans, errors } = await this.preflightArchive(relativePaths);
     if (errors.length) return { status: 'failed', archived: [], failed: errors.map((error) => ({ error })), skipped: [], errors };
     const archiveRoot = resolveNmrPath(this.archiveFolder);
@@ -820,6 +1178,7 @@ class NmrInboxStore {
     const failed = [];
     const skipped = [];
     const auditErrors = [];
+    const registrationErrors = [];
     for (const plan of plans) {
       if (!insideRoot(plan.sourcePath, resolveNmrPath(this.inboxFolder)) || !insideRoot(plan.destinationPath, archiveRoot)) {
         failed.push({ plan, error: '归档路径校验失败' });
@@ -836,8 +1195,10 @@ class NmrInboxStore {
         file_count: plan.fileCount,
         directory_count: plan.directoryCount,
         total_bytes: plan.totalBytes,
-        experiment_id: '',
-        compound_id: ''
+        project_id: String(relations.projectId || ''),
+        experiment_id: String(relations.experimentId || ''),
+        compound_id: String(relations.compoundId || ''),
+        data_asset_id: ''
       };
       try {
         await this.writeAudit({ ...auditBase, status: 'started' });
@@ -851,8 +1212,28 @@ class NmrInboxStore {
         await fs.mkdir(path.win32.dirname(plan.destinationPath), { recursive: true });
         await fs.rename(plan.sourcePath, plan.destinationPath);
         archived.push(plan);
+        let dataAssetId = '';
         try {
-          await this.writeAudit({ ...auditBase, timestamp: new Date().toISOString(), status: 'success' });
+          const result = await createDataAsset(this.app, {
+            title: `${plan.relativeScanPath} · ${plan.nucleus} NMR`,
+            assetType: 'nmr',
+            dataPath: plan.destinationPath,
+            projectId: relations.projectId || '',
+            project: relations.project || '',
+            experimentId: relations.experimentId || '',
+            experiment: relations.experiment || '',
+            compoundId: relations.compoundId || '',
+            compound: relations.compound || '',
+            acquiredAt: plan.modified
+          }, generateRecordId);
+          dataAssetId = result.asset.recordId;
+        } catch (registrationError) {
+          const message = registrationError instanceof Error ? registrationError.message : String(registrationError);
+          registrationErrors.push({ plan, error: message });
+          console.error('[Research Workbench] NMR DataAsset registration failed', registrationError);
+        }
+        try {
+          await this.writeAudit({ ...auditBase, data_asset_id: dataAssetId, timestamp: new Date().toISOString(), status: 'success', ...(dataAssetId ? {} : { registration_error: registrationErrors[registrationErrors.length - 1]?.error || '数据资产登记失败' }) });
         } catch (auditError) {
           const message = auditError instanceof Error ? auditError.message : String(auditError);
           auditErrors.push({ plan, error: message });
@@ -869,8 +1250,8 @@ class NmrInboxStore {
     }
     const firstFailedIndex = archived.length + failed.length;
     for (let index = firstFailedIndex; index < plans.length; index += 1) skipped.push({ plan: plans[index], reason: '前一项归档失败，未执行' });
-    const status = archiveBatchStatus(archived.length, failed.length + auditErrors.length);
-    return { status, archived, failed, skipped, auditErrors, errors: [] };
+    const status = archiveBatchStatus(archived.length, failed.length + auditErrors.length + registrationErrors.length);
+    return { status, archived, failed, skipped, auditErrors, registrationErrors, errors: [] };
   }
 }
 
@@ -889,7 +1270,7 @@ module.exports = {
 
 },
 "./lib/nmr-archive-modal": function (module, exports, require) {
-const { Modal, Notice } = require('obsidian');
+const { Modal, Notice, Setting } = require('obsidian');
 
 class NmrArchiveModal extends Modal {
   constructor(app, nmrInboxStore, relativePaths, options = {}) {
@@ -903,6 +1284,7 @@ class NmrArchiveModal extends Modal {
     this.resultShown = false;
     this.ctaButton = null;
     this.body = null;
+    this.relations = { projectId: '', project: '', experimentId: '', experiment: '', compoundId: '', compound: '' };
   }
 
   onOpen() {
@@ -910,6 +1292,7 @@ class NmrArchiveModal extends Modal {
     this.contentEl.createEl('h2', { text: '确认归档核磁原始数据' });
     this.body = this.contentEl.createDiv();
     this.body.createDiv({ cls: 'phdcc-empty', text: '正在检查来源、核种和目标路径…' });
+    this.renderRelations();
     const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
     const cancel = footer.createEl('button', { text: '取消', type: 'button' });
     cancel.addEventListener('click', () => this.close());
@@ -917,6 +1300,26 @@ class NmrArchiveModal extends Modal {
     this.ctaButton.disabled = true;
     this.ctaButton.addEventListener('click', () => { void this.submit(); });
     void this.prepare();
+  }
+
+  renderRelations() {
+    const store = this.options.entityStore;
+    if (!store) return;
+    const container = this.contentEl.createDiv({ cls: 'phdcc-archive-relations' });
+    container.createEl('h3', { text: '科研关系（可选）' });
+    const projects = store.listProjects();
+    const experiments = store.listExperiments();
+    const compounds = store.listCompounds();
+    const add = (label, key, items, idKey = `${key}Id`) => {
+      new Setting(container).setName(label).addDropdown((dropdown) => {
+        dropdown.addOption('', '不关联');
+        items.forEach((item) => { if (item.id) dropdown.addOption(item.id, `${item.title} · ${item.id}`); });
+        dropdown.onChange((value) => { this.relations[idKey] = value; const item = items.find((candidate) => candidate.id === value); this.relations[key] = item?.title || ''; });
+      });
+    };
+    add('课题', 'project', projects);
+    add('实验', 'experiment', experiments);
+    add('化合物', 'compound', compounds);
   }
 
   async prepare() {
@@ -964,7 +1367,7 @@ class NmrArchiveModal extends Modal {
     this.ctaButton.disabled = true;
     this.ctaButton.setText('归档中…');
     try {
-      const result = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath));
+      const result = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath), this.relations);
       if (typeof this.options.onArchived === 'function') await this.options.onArchived(result);
       if (result.status === 'completed') {
         this.close();
@@ -980,6 +1383,7 @@ class NmrArchiveModal extends Modal {
         this.body.createDiv({ cls: 'phdcc-file-next', text: `成功 ${result.archived.length} · 失败 ${result.failed.length} · 未执行 ${result.skipped.length} · 审计异常 ${result.auditErrors?.length || 0}` });
         result.failed.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：${item.error}` }));
         result.auditErrors?.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：数据已移动但成功审计写入失败：${item.error}` }));
+        result.registrationErrors?.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：数据已移动但 DataAsset 登记失败：${item.error}` }));
         new Notice(`核磁归档完成：成功 ${result.archived.length}，失败 ${result.failed.length}，未执行 ${result.skipped.length}，审计异常 ${result.auditErrors?.length || 0}`);
       }
     } catch (error) {
@@ -1150,6 +1554,8 @@ class ExperimentModal extends Modal {
       status: 'doing',
       project: '',
       projectId: '',
+      compound: '',
+      compoundId: '',
       experimentType: 'general',
       sample: '',
       objective: '',
@@ -1181,8 +1587,8 @@ class ExperimentModal extends Modal {
       dropdown.onChange((value) => { this.state.status = value; });
     });
 
-    this.addText('关联课题（可选）', '例如：[[课题名称]]', 'project');
-    this.addText('课题 ID（可选）', '例如：PROJ-01K…', 'projectId');
+    this.addRelationSelect('project');
+    this.addRelationSelect('compound');
     new Setting(contentEl).setName('实验类型').addDropdown((dropdown) => {
       [['general', '通用实验'], ['synthesis', '合成'], ['characterization', '表征'], ['analysis', '分析']]
         .forEach(([value, label]) => dropdown.addOption(value, label));
@@ -1218,6 +1624,17 @@ class ExperimentModal extends Modal {
         });
         window.setTimeout(() => text.inputEl.focus(), 50);
       }
+    });
+  }
+
+  addRelationSelect(kind) {
+    const store = this.options.entityStore;
+    const items = store ? (kind === 'project' ? store.listProjects() : store.listCompounds()) : [];
+    const label = kind === 'project' ? '关联课题（可选）' : '关联化合物（可选）';
+    new Setting(this.contentEl).setName(label).addDropdown((dropdown) => {
+      dropdown.addOption('', '不关联');
+      items.forEach((item) => dropdown.addOption(item.id, `${item.title} · ${item.id}`));
+      dropdown.onChange((value) => { this.state[`${kind}Id`] = value; const item = items.find((candidate) => candidate.id === value); this.state[kind] = item?.title || ''; });
     });
   }
 
@@ -1358,6 +1775,9 @@ class QuickCreateModal extends Modal {
     const options = [
       ['check-square', '任务', '安排一个需要完成的工作', 'task'],
       ['test-tube', '实验记录', '记录实验目标、过程和下一步', 'experiment'],
+      ['folder-kanban', '课题', '建立一个可关联实验和数据的课题', 'project'],
+      ['atom', '化合物', '登记化合物与表征信息', 'compound'],
+      ['database', '数据资产', '登记 NMR、HPLC、MS 等数据', 'data-asset'],
       ['notebook-pen', '今日复盘', '创建一条复盘任务', 'review']
     ];
     const list = this.contentEl.createDiv({ cls: 'phdcc-quick-create-list' });
@@ -1372,6 +1792,9 @@ class QuickCreateModal extends Modal {
         this.close();
         if (type === 'task' && typeof this.options.onTask === 'function') this.options.onTask();
         if (type === 'experiment' && typeof this.options.onExperiment === 'function') this.options.onExperiment();
+        if (type === 'project' && typeof this.options.onProject === 'function') this.options.onProject();
+        if (type === 'compound' && typeof this.options.onCompound === 'function') this.options.onCompound();
+        if (type === 'data-asset' && typeof this.options.onDataAsset === 'function') this.options.onDataAsset();
         if (type === 'review' && typeof this.options.onReview === 'function') this.options.onReview();
       });
       if (index === 0) window.setTimeout(() => button.focus(), 50);
@@ -1402,6 +1825,161 @@ async function openQuickCreateCommand(app, viewType, ViewClass, activateView) {
 module.exports = { openQuickCreateCommand };
 
 },
+"./lib/modals/project-modal": function (module, exports, require) {
+const { Modal, Notice, Setting } = require('obsidian');
+const { createProject } = require('./lib/entities/project');
+const { generateRecordId } = require('./lib/data');
+
+class ProjectModal extends Modal {
+  constructor(app, options = {}) { super(app); this.options = options; this.state = { title: '', description: '', nextAction: '', saving: false }; }
+  onOpen() {
+    this.modalEl.addClass('phdcc-task-modal');
+    this.contentEl.createEl('h2', { text: '新增课题' });
+    new Setting(this.contentEl).setName('课题名称').addText((text) => { text.inputEl.required = true; text.inputEl.placeholder = '例如：β-Galactosidase Probe'; text.onChange((value) => { this.state.title = value; }); setTimeout(() => text.inputEl.focus(), 30); });
+    new Setting(this.contentEl).setName('简介（可选）').addTextArea((area) => { area.inputEl.rows = 3; area.onChange((value) => { this.state.description = value; }); });
+    new Setting(this.contentEl).setName('下一步（可选）').addText((text) => text.onChange((value) => { this.state.nextAction = value; }));
+    const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
+    footer.createEl('button', { text: '取消', attr: { type: 'button' } }).addEventListener('click', () => this.close());
+    const save = footer.createEl('button', { text: '创建课题', cls: 'mod-cta', attr: { type: 'button' } });
+    save.addEventListener('click', async () => { if (this.state.saving || !this.state.title.trim()) return void new Notice('请输入课题名称'); this.state.saving = true; save.disabled = true; try { const file = await createProject(this.app, this.state, generateRecordId); if (this.options.onCreated) await this.options.onCreated(file); this.close(); new Notice('课题已创建'); } catch (error) { this.state.saving = false; save.disabled = false; new Notice(error instanceof Error ? error.message : '课题创建失败'); } });
+  }
+  onClose() { this.contentEl.empty(); }
+}
+module.exports = { ProjectModal };
+
+},
+"./lib/modals/compound-modal": function (module, exports, require) {
+const { Modal, Notice, Setting } = require('obsidian');
+const { createCompound } = require('./lib/entities/compound');
+const { generateRecordId } = require('./lib/data');
+
+class CompoundModal extends Modal {
+  constructor(app, entityStore, options = {}) { super(app); this.entityStore = entityStore; this.options = options; this.state = { compoundCode: '', name: '', projectId: '', project: '', smiles: '', formula: '', molecularWeight: '', notes: '', saving: false }; }
+  onOpen() {
+    this.modalEl.addClass('phdcc-task-modal');
+    this.contentEl.createEl('h2', { text: '新增化合物' });
+    new Setting(this.contentEl).setName('化合物编号').addText((text) => { text.inputEl.required = true; text.inputEl.placeholder = '例如：YLY-145'; text.onChange((value) => { this.state.compoundCode = value; }); setTimeout(() => text.inputEl.focus(), 30); });
+    new Setting(this.contentEl).setName('名称（可选）').addText((text) => text.onChange((value) => { this.state.name = value; }));
+    this.addProjectSelect();
+    new Setting(this.contentEl).setName('SMILES（可选）').addText((text) => text.onChange((value) => { this.state.smiles = value; }));
+    new Setting(this.contentEl).setName('分子式（可选）').addText((text) => text.onChange((value) => { this.state.formula = value; }));
+    new Setting(this.contentEl).setName('分子量（可选）').addText((text) => text.onChange((value) => { this.state.molecularWeight = value; }));
+    new Setting(this.contentEl).setName('备注（可选）').addTextArea((area) => { area.inputEl.rows = 3; area.onChange((value) => { this.state.notes = value; }); });
+    const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
+    footer.createEl('button', { text: '取消', attr: { type: 'button' } }).addEventListener('click', () => this.close());
+    const save = footer.createEl('button', { text: '创建化合物', cls: 'mod-cta', attr: { type: 'button' } });
+    save.addEventListener('click', async () => { if (this.state.saving || !this.state.compoundCode.trim()) return void new Notice('请输入化合物编号'); this.state.saving = true; save.disabled = true; try { const file = await createCompound(this.app, this.state, generateRecordId); if (this.options.onCreated) await this.options.onCreated(file); this.close(); new Notice('化合物已创建'); } catch (error) { this.state.saving = false; save.disabled = false; new Notice(error instanceof Error ? error.message : '化合物创建失败'); } });
+  }
+  addProjectSelect() {
+    const projects = this.entityStore.listProjects();
+    new Setting(this.contentEl).setName('所属课题（可选）').addDropdown((dropdown) => { dropdown.addOption('', '不关联'); projects.forEach((project) => { if (project.id) dropdown.addOption(project.id, `${project.title} · ${project.id}`); }); dropdown.onChange((value) => { this.state.projectId = value; const project = projects.find((item) => item.id === value); this.state.project = project?.title || ''; }); });
+  }
+  onClose() { this.contentEl.empty(); }
+}
+module.exports = { CompoundModal };
+
+},
+"./lib/modals/data-asset-modal": function (module, exports, require) {
+const { Modal, Notice, Setting } = require('obsidian');
+const { createDataAsset, ASSET_TYPES } = require('./lib/entities/data-asset');
+const { generateRecordId } = require('./lib/data');
+
+const ASSET_LABELS = { nmr: 'NMR', hplc: 'HPLC', ms: 'MS', uvvis: 'UV-Vis', fluorescence: '荧光', image: '图像', orca: 'ORCA', raw: '原始数据', other: '其他' };
+
+class DataAssetModal extends Modal {
+  constructor(app, entityStore, options = {}) { super(app); this.entityStore = entityStore; this.options = options; this.state = { title: '', assetType: 'nmr', dataPath: '', projectId: '', project: '', experimentId: '', experiment: '', compoundId: '', compound: '', acquiredAt: '', notes: '', saving: false }; }
+  onOpen() {
+    this.modalEl.addClass('phdcc-task-modal');
+    this.contentEl.createEl('h2', { text: '新增数据资产' });
+    new Setting(this.contentEl).setName('标题').addText((text) => { text.inputEl.required = true; text.inputEl.placeholder = '例如：YLY-145 1H NMR'; text.onChange((value) => { this.state.title = value; }); setTimeout(() => text.inputEl.focus(), 30); });
+    new Setting(this.contentEl).setName('类型').addDropdown((dropdown) => { ASSET_TYPES.forEach((type) => dropdown.addOption(type, ASSET_LABELS[type] || type)); dropdown.setValue(this.state.assetType); dropdown.onChange((value) => { this.state.assetType = value; }); });
+    new Setting(this.contentEl).setName('数据路径').addText((text) => { text.inputEl.required = true; text.inputEl.placeholder = 'Vault 内路径或 Windows 外部路径'; text.onChange((value) => { this.state.dataPath = value; }); });
+    this.addRelationSelect('project');
+    this.addRelationSelect('experiment');
+    this.addRelationSelect('compound');
+    new Setting(this.contentEl).setName('采集日期（可选）').addText((text) => { text.inputEl.type = 'date'; text.onChange((value) => { this.state.acquiredAt = value; }); });
+    new Setting(this.contentEl).setName('备注（可选）').addTextArea((area) => { area.inputEl.rows = 3; area.onChange((value) => { this.state.notes = value; }); });
+    const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
+    footer.createEl('button', { text: '取消', attr: { type: 'button' } }).addEventListener('click', () => this.close());
+    const save = footer.createEl('button', { text: '创建数据资产', cls: 'mod-cta', attr: { type: 'button' } });
+    save.addEventListener('click', async () => { if (this.state.saving || !this.state.title.trim() || !this.state.dataPath.trim()) return void new Notice('请填写标题和数据路径'); this.state.saving = true; save.disabled = true; try { const result = await createDataAsset(this.app, this.state, generateRecordId); if (this.options.onCreated) await this.options.onCreated(result.file, result.asset); this.close(); new Notice('数据资产已创建'); } catch (error) { this.state.saving = false; save.disabled = false; new Notice(error instanceof Error ? error.message : '数据资产创建失败'); } });
+  }
+  addRelationSelect(kind) {
+    const config = { project: ['课题', this.entityStore.listProjects()], experiment: ['实验', this.entityStore.listExperiments()], compound: ['化合物', this.entityStore.listCompounds()] }[kind];
+    const [label, items] = config;
+    new Setting(this.contentEl).setName(`${label}（可选）`).addDropdown((dropdown) => { dropdown.addOption('', '不关联'); items.forEach((item) => { if (item.id) dropdown.addOption(item.id, `${item.title} · ${item.id}`); }); dropdown.onChange((value) => { this.state[`${kind}Id`] = value; const item = items.find((candidate) => candidate.id === value); this.state[kind] = item?.title || ''; }); });
+  }
+  onClose() { this.contentEl.empty(); }
+}
+module.exports = { DataAssetModal, ASSET_LABELS };
+
+},
+"./lib/modals/migration-modal": function (module, exports, require) {
+const { Modal, Notice } = require('obsidian');
+const { PermanentIdMigration } = require('./lib/migrations/permanent-id');
+const { generateRecordId } = require('./lib/data');
+
+class MigrationModal extends Modal {
+  constructor(app, plugin, options = {}) {
+    super(app);
+    this.plugin = plugin;
+    this.options = options;
+    this.migration = new PermanentIdMigration(plugin, generateRecordId);
+    this.items = [];
+    this.busy = false;
+  }
+
+  onOpen() {
+    this.modalEl.addClass('phdcc-task-modal');
+    this.contentEl.createEl('h2', { text: '永久 ID 迁移' });
+    this.contentEl.createEl('p', { text: '为仍使用旧路径识别的任务、实验和课题补写永久 record_id。只会新增缺失字段，不会移动或改写其他内容。' });
+    this.previewEl = this.contentEl.createDiv({ cls: 'phdcc-migration-preview' });
+    this.buttonEl = this.contentEl.createEl('button', { text: '扫描旧记录', cls: 'mod-cta', attr: { type: 'button' } });
+    this.buttonEl.addEventListener('click', () => this.scan());
+    this.scan();
+  }
+
+  scan() {
+    this.items = this.migration.scan();
+    this.renderPreview();
+  }
+
+  renderPreview() {
+    this.previewEl.empty();
+    if (!this.items.length) {
+      this.previewEl.createEl('p', { text: '没有发现需要迁移的旧记录。' });
+      this.buttonEl.disabled = true;
+      this.buttonEl.textContent = '无需迁移';
+      return;
+    }
+    this.previewEl.createEl('p', { text: `发现 ${this.items.length} 条记录，确认后写入永久 ID：` });
+    const list = this.previewEl.createEl('ul');
+    this.items.slice(0, 20).forEach((item) => list.createEl('li', { text: `${item.title} · ${item.type} → ${item.proposedId}` }));
+    if (this.items.length > 20) this.previewEl.createEl('p', { text: `另有 ${this.items.length - 20} 条未展开。` });
+    this.buttonEl.disabled = false;
+    this.buttonEl.textContent = `确认迁移 ${this.items.length} 条记录`;
+    this.buttonEl.onclick = () => this.apply();
+  }
+
+  async apply() {
+    if (this.busy || !this.items.length) return;
+    this.busy = true;
+    this.buttonEl.disabled = true;
+    this.buttonEl.textContent = '迁移中…';
+    const result = await this.migration.apply(this.items);
+    const failedText = result.failed.length ? `，失败 ${result.failed.length} 条` : '';
+    new Notice(`永久 ID 迁移完成：成功 ${result.migrated.length} 条${failedText}`);
+    this.previewEl.createEl('p', { text: `结果：${result.status}；成功 ${result.migrated.length} 条${failedText}` });
+    if (this.options.onCompleted) await this.options.onCompleted(result);
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+module.exports = { MigrationModal };
+
+},
 "./lib/view": function (module, exports, require) {
 const { ItemView, Notice, setIcon } = require('obsidian');
 const {
@@ -1422,12 +2000,17 @@ const { NmrInboxStore } = require('./lib/nmr');
 const { NmrArchiveModal } = require('./lib/nmr-archive-modal');
 const { QuickCreateModal } = require('./lib/quick-create-modal');
 const { ResearchDatabase } = require('./lib/database');
+const { EntityStore } = require('./lib/entities/store');
+const { ProjectModal } = require('./lib/modals/project-modal');
+const { CompoundModal } = require('./lib/modals/compound-modal');
+const { DataAssetModal } = require('./lib/modals/data-asset-modal');
+const { MigrationModal } = require('./lib/modals/migration-modal');
 
 const VIEW_TYPE = 'phd-command-center-view';
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 const PRIORITY_LABEL = { high: '高', medium: '中', low: '低' };
 const EXPERIMENT_STATUS_LABEL = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻' };
-const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'experiments', 'nmr-inbox', 'data', 'literature', 'writing', 'daily-review', 'research-db']);
+const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'experiments', 'compound', 'nmr-inbox', 'data', 'literature', 'writing', 'daily-review', 'research-db', 'integrity']);
 
 const NAV_GROUPS = [
   ['总览', [
@@ -1438,6 +2021,7 @@ const NAV_GROUPS = [
   ['科研', [
     ['projects', '课题项目', 'flask-conical'],
     ['experiments', '实验记录', 'test-tube'],
+    ['compound', '化合物', 'atom'],
     ['data', '数据资产', 'database'],
     ['nmr-inbox', '待解核磁', 'scan-line']
   ]],
@@ -1505,6 +2089,7 @@ class WorkbenchView extends ItemView {
     this.taskStore = new TaskStore(plugin);
     this.researchDatabase = new ResearchDatabase(plugin);
     this.nmrInboxStore = new NmrInboxStore(plugin);
+    this.entityStore = new EntityStore(plugin);
     this.tasks = [];
     this.nmrScans = [];
     this.nmrError = '';
@@ -1632,12 +2217,14 @@ class WorkbenchView extends ItemView {
       projects: () => this.renderProjectPage('课题项目'),
       reviews: () => this.renderReadOnlyPage('周月总结', PROGRESS_FOLDER, false),
       experiments: () => this.renderExperimentPage(),
+      compound: () => this.renderCompoundPage(),
       'research-db': () => this.renderResearchDatabasePage(),
       'nmr-inbox': () => this.renderNmrInboxPage(),
       data: () => this.renderDataPage(),
       literature: () => this.renderReadOnlyPage('文献资料', LITERATURE_FOLDERS, false),
       writing: () => this.renderReadOnlyPage('写作管线', WRITING_FOLDER, true),
       'daily-review': () => this.renderFocusPage('今日复盘', '复盘', '写下今天最重要的收获与下一步改进')
+      ,integrity: () => this.renderIntegrityPage()
     }[this.activeSection] || (() => this.renderToday());
     renderer();
   }
@@ -1646,6 +2233,9 @@ class WorkbenchView extends ItemView {
     new QuickCreateModal(this.app, {
       onTask: () => this.openTaskModal(),
       onExperiment: () => this.openExperimentModal(),
+      onProject: () => this.openProjectModal(),
+      onCompound: () => this.openCompoundModal(),
+      onDataAsset: () => this.openDataAssetModal(),
       onReview: () => this.openTaskModal({ category: '复盘', due: localDate() })
     }).open();
   }
@@ -1670,6 +2260,7 @@ class WorkbenchView extends ItemView {
   openExperimentModal(options = {}) {
     try {
       new ExperimentModal(this.app, this.taskStore, {
+        entityStore: this.entityStore,
         experimentDate: options.experimentDate || localDate(),
         onCreated: async (file) => {
           await this.openFile(file);
@@ -1680,6 +2271,11 @@ class WorkbenchView extends ItemView {
       new Notice('无法打开新增实验记录窗口');
     }
   }
+
+  openProjectModal() { new ProjectModal(this.app, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
+  openCompoundModal() { new CompoundModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
+  openDataAssetModal() { new DataAssetModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
+  openMigrationModal() { new MigrationModal(this.app, this.plugin, { onCompleted: async () => { await this.refresh(); } }).open(); }
 
   filteredTasks(tasks) {
     const query = this.searchQuery.trim().toLowerCase();
@@ -1727,6 +2323,7 @@ class WorkbenchView extends ItemView {
     const selected = [...this.selectedNmrPaths];
     if (!selected.length) return void new Notice('请先勾选要归档的核磁原始数据');
     new NmrArchiveModal(this.app, this.nmrInboxStore, selected, {
+      entityStore: this.entityStore,
       onArchived: async (result) => {
         this.selectedNmrPaths.clear();
         if (result?.status === 'completed' || result?.status === 'partial_failure') await this.refreshNmrInbox();
@@ -1889,12 +2486,14 @@ class WorkbenchView extends ItemView {
   }
 
   renderProjectPage(title) {
-    this.renderPageHeader(title);
-    const items = this.filteredFiles(this.readOnlyItems(PROJECT_FOLDER, 30, true));
+    this.renderPageHeader(title, '课题、实验与数据的关系入口', { label: '+ 新增课题', onClick: () => this.openProjectModal() });
+    const formal = this.entityStore.listProjects();
+    const items = formal.length ? formal : this.filteredFiles(this.readOnlyItems(PROJECT_FOLDER, 30, true));
     const grid = this.pageEl.createDiv({ cls: 'phdcc-project-grid' });
     if (!items.length) return void grid.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配项目' : '暂无项目；可从原工作台的课题模板开始创建。' });
-    items.forEach((file) => {
-      const info = this.fileInfo(file);
+    items.forEach((item) => {
+      const file = item.file || item;
+      const info = item.file ? { ...this.fileInfo(item.file), title: item.title, status: item.status, nextAction: item.nextAction, projectId: item.id } : this.fileInfo(file);
       const card = grid.createDiv({ cls: 'phdcc-project-card' });
       const heading = card.createDiv({ cls: 'phdcc-project-title', text: info.title });
       heading.addEventListener('click', () => { void this.openFile(file); });
@@ -1902,6 +2501,30 @@ class WorkbenchView extends ItemView {
       card.createDiv({ cls: 'phdcc-project-meta', text: metadata.join(' · ') || info.path });
       if (info.nextAction) card.createDiv({ cls: 'phdcc-project-next', text: `下一步：${info.nextAction}` });
     });
+  }
+
+  renderCompoundPage() {
+    this.renderPageHeader('化合物', '化合物是实验与数据资产的稳定关联节点', { label: '+ 新增化合物', onClick: () => this.openCompoundModal() });
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    const items = this.entityStore.listCompounds().filter((item) => !this.searchQuery || `${item.title} ${item.compoundCode} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
+    if (!items.length) return void card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配化合物' : '暂无化合物' });
+    items.forEach((item) => {
+      const row = card.createDiv({ cls: 'phdcc-file-row' });
+      const title = row.createDiv({ cls: 'phdcc-file-title', text: `${item.compoundCode || item.title} · ${item.title}` });
+      title.addEventListener('click', () => { void this.openFile(item.file); });
+      row.createDiv({ cls: 'phdcc-file-meta', text: `${item.project || '未关联课题'} · ${item.id}` });
+      const counts = this.researchDatabase.records.filter((record) => record.compoundId === item.id);
+      row.createDiv({ cls: 'phdcc-file-next', text: `关联记录：${counts.length}` });
+    });
+  }
+
+  renderIntegrityPage() {
+    this.renderPageHeader('关系检查', '永久 ID 引用完整性与科研实体关系', { label: '返回科研数据库', onClick: () => { this.activeSection = 'research-db'; this.saveUiState(); this.renderPage(); } });
+    const stats = this.pageEl.createDiv({ cls: 'phdcc-stats' });
+    [['有效关系', this.researchDatabase.validRelationCount || 0], ['问题', this.researchDatabase.relationshipIssues?.length || 0], ['重复 ID', this.researchDatabase.duplicateIds?.length || 0]].forEach(([label, value]) => { const card = stats.createDiv({ cls: 'phdcc-stat-card' }); card.createDiv({ cls: 'phdcc-stat-label', text: label }); card.createDiv({ cls: 'phdcc-stat-value', text: String(value) }); });
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    if (!this.researchDatabase.relationshipIssues?.length) return void card.createDiv({ cls: 'phdcc-empty', text: '关系检查通过，未发现问题。' });
+    this.researchDatabase.relationshipIssues.forEach((issue) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); row.createDiv({ cls: 'phdcc-file-title', text: `${issue.type} · ${issue.message}` }); row.createDiv({ cls: 'phdcc-file-meta', text: `${issue.sourcePath} · ${issue.field || ''} · ${issue.targetId || ''}` }); const open = row.createEl('button', { cls: 'phdcc-row-action', text: '打开来源', attr: { type: 'button' } }); open.addEventListener('click', () => { const file = this.app.vault.getAbstractFileByPath(issue.sourcePath); if (file) void this.openFile(file); }); });
   }
 
   renderExperimentPage() {
@@ -1950,6 +2573,10 @@ class WorkbenchView extends ItemView {
       text: '↻ 同步数据库',
       attr: { type: 'button', title: '重新扫描并更新科研数据库' }
     });
+    const maintenance = this.pageEl.createEl('button', { cls: 'phdcc-page-add phdcc-calendar-add', text: '数据维护：永久 ID', attr: { type: 'button' } });
+    maintenance.addEventListener('click', () => this.openMigrationModal());
+    const integrity = this.pageEl.createEl('button', { cls: 'phdcc-page-add phdcc-calendar-add', text: `关系检查 (${this.researchDatabase.relationshipIssues?.length || 0})`, attr: { type: 'button' } });
+    integrity.addEventListener('click', () => { this.activeSection = 'integrity'; this.saveUiState(); this.renderPage(); });
     refresh.addEventListener('click', async () => {
       refresh.disabled = true;
       refresh.textContent = '同步中…';
@@ -2054,12 +2681,13 @@ class WorkbenchView extends ItemView {
   }
 
   renderDataPage() {
-    this.renderPageHeader('数据资产', '原始数据位置与派生索引', {
-      label: '打开科研数据库',
-      onClick: () => { this.activeSection = 'research-db'; this.saveUiState(); this.renderPage(); }
-    });
+    this.renderPageHeader('数据资产', '原始数据位置与派生索引', { label: '+ 新增数据资产', onClick: () => this.openDataAssetModal() });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
-    this.renderReadOnlyList(card, this.filteredFiles(this.readOnlyItems(DATA_FOLDER, 30, true)), this.searchQuery ? '没有匹配数据资产' : '暂无数据资产');
+    const assets = this.entityStore.listDataAssets().filter((item) => !this.searchQuery || `${item.title} ${item.assetType} ${item.dataPath} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
+    if (assets.length) assets.forEach((item) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: item.title }); title.addEventListener('click', () => { void this.openFile(item.file); }); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.assetType || 'other'} · ${item.project || '未关联课题'} · ${item.id}` }); row.createDiv({ cls: 'phdcc-file-next', text: item.dataPath || '未记录数据路径' }); });
+    const legacy = this.filteredFiles(this.readOnlyItems(DATA_FOLDER, 30, true));
+    if (legacy.length) { card.createEl('h3', { text: '旧数据记录（只读）' }); this.renderReadOnlyList(card, legacy, ''); }
+    if (!assets.length && !legacy.length) card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配数据资产' : '暂无数据资产' });
   }
 
   renderNmrInboxPage() {
@@ -2155,6 +2783,7 @@ class WorkbenchView extends ItemView {
       status: frontmatter.status ? String(frontmatter.status) : '',
       project: String(frontmatter.project || ''),
       projectId: String(frontmatter.project_id || ''),
+      compoundId: String(frontmatter.compound_id || ''),
       experimentDate: String(frontmatter.experiment_date || frontmatter.date || ''),
       experimentType: String(frontmatter.experiment_type || ''),
       sample: String(frontmatter.sample || ''),

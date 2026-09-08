@@ -5,6 +5,8 @@ const NMR_INBOX_FOLDER = '';
 const NMR_ARCHIVE_FOLDER = '';
 const NUCLEUS_ARCHIVE_MAP = { '1H': '氢谱', '13C': '碳谱' };
 const { AUDIT_FOLDER, AUDIT_FILE } = require('./database');
+const { createDataAsset } = require('./entities/data-asset');
+const { generateRecordId } = require('./data');
 
 const { spawn } = require('child_process');
 
@@ -261,7 +263,7 @@ class NmrInboxStore {
     else await this.app.vault.append(file, line);
   }
 
-  async archiveSelected(relativePaths) {
+  async archiveSelected(relativePaths, relations = {}) {
     const { plans, errors } = await this.preflightArchive(relativePaths);
     if (errors.length) return { status: 'failed', archived: [], failed: errors.map((error) => ({ error })), skipped: [], errors };
     const archiveRoot = resolveNmrPath(this.archiveFolder);
@@ -269,6 +271,7 @@ class NmrInboxStore {
     const failed = [];
     const skipped = [];
     const auditErrors = [];
+    const registrationErrors = [];
     for (const plan of plans) {
       if (!insideRoot(plan.sourcePath, resolveNmrPath(this.inboxFolder)) || !insideRoot(plan.destinationPath, archiveRoot)) {
         failed.push({ plan, error: '归档路径校验失败' });
@@ -285,8 +288,10 @@ class NmrInboxStore {
         file_count: plan.fileCount,
         directory_count: plan.directoryCount,
         total_bytes: plan.totalBytes,
-        experiment_id: '',
-        compound_id: ''
+        project_id: String(relations.projectId || ''),
+        experiment_id: String(relations.experimentId || ''),
+        compound_id: String(relations.compoundId || ''),
+        data_asset_id: ''
       };
       try {
         await this.writeAudit({ ...auditBase, status: 'started' });
@@ -300,8 +305,28 @@ class NmrInboxStore {
         await fs.mkdir(path.win32.dirname(plan.destinationPath), { recursive: true });
         await fs.rename(plan.sourcePath, plan.destinationPath);
         archived.push(plan);
+        let dataAssetId = '';
         try {
-          await this.writeAudit({ ...auditBase, timestamp: new Date().toISOString(), status: 'success' });
+          const result = await createDataAsset(this.app, {
+            title: `${plan.relativeScanPath} · ${plan.nucleus} NMR`,
+            assetType: 'nmr',
+            dataPath: plan.destinationPath,
+            projectId: relations.projectId || '',
+            project: relations.project || '',
+            experimentId: relations.experimentId || '',
+            experiment: relations.experiment || '',
+            compoundId: relations.compoundId || '',
+            compound: relations.compound || '',
+            acquiredAt: plan.modified
+          }, generateRecordId);
+          dataAssetId = result.asset.recordId;
+        } catch (registrationError) {
+          const message = registrationError instanceof Error ? registrationError.message : String(registrationError);
+          registrationErrors.push({ plan, error: message });
+          console.error('[Research Workbench] NMR DataAsset registration failed', registrationError);
+        }
+        try {
+          await this.writeAudit({ ...auditBase, data_asset_id: dataAssetId, timestamp: new Date().toISOString(), status: 'success', ...(dataAssetId ? {} : { registration_error: registrationErrors[registrationErrors.length - 1]?.error || '数据资产登记失败' }) });
         } catch (auditError) {
           const message = auditError instanceof Error ? auditError.message : String(auditError);
           auditErrors.push({ plan, error: message });
@@ -318,8 +343,8 @@ class NmrInboxStore {
     }
     const firstFailedIndex = archived.length + failed.length;
     for (let index = firstFailedIndex; index < plans.length; index += 1) skipped.push({ plan: plans[index], reason: '前一项归档失败，未执行' });
-    const status = archiveBatchStatus(archived.length, failed.length + auditErrors.length);
-    return { status, archived, failed, skipped, auditErrors, errors: [] };
+    const status = archiveBatchStatus(archived.length, failed.length + auditErrors.length + registrationErrors.length);
+    return { status, archived, failed, skipped, auditErrors, registrationErrors, errors: [] };
   }
 }
 

@@ -19,6 +19,8 @@ class ExperimentModal extends Modal {
       status: 'doing',
       project: '',
       projectId: '',
+      compound: '',
+      compoundId: '',
       experimentType: 'general',
       sample: '',
       objective: '',
@@ -50,8 +52,8 @@ class ExperimentModal extends Modal {
       dropdown.onChange((value) => { this.state.status = value; });
     });
 
-    this.addText('关联课题（可选）', '例如：[[课题名称]]', 'project');
-    this.addText('课题 ID（可选）', '例如：PROJ-01K…', 'projectId');
+    this.addRelationSelect('project');
+    this.addRelationSelect('compound');
     new Setting(contentEl).setName('实验类型').addDropdown((dropdown) => {
       [['general', '通用实验'], ['synthesis', '合成'], ['characterization', '表征'], ['analysis', '分析']]
         .forEach(([value, label]) => dropdown.addOption(value, label));
@@ -87,6 +89,17 @@ class ExperimentModal extends Modal {
         });
         window.setTimeout(() => text.inputEl.focus(), 50);
       }
+    });
+  }
+
+  addRelationSelect(kind) {
+    const store = this.options.entityStore;
+    const items = store ? (kind === 'project' ? store.listProjects() : store.listCompounds()) : [];
+    const label = kind === 'project' ? '关联课题（可选）' : '关联化合物（可选）';
+    new Setting(this.contentEl).setName(label).addDropdown((dropdown) => {
+      dropdown.addOption('', '不关联');
+      items.forEach((item) => dropdown.addOption(item.id, `${item.title} · ${item.id}`));
+      dropdown.onChange((value) => { this.state[`${kind}Id`] = value; const item = items.find((candidate) => candidate.id === value); this.state[kind] = item?.title || ''; });
     });
   }
 

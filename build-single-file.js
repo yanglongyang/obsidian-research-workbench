@@ -5,6 +5,11 @@ const pluginDir = path.join(__dirname, 'plugin');
 const entries = [
   ['./lib/data', path.join(pluginDir, 'lib', 'data.js')],
   ['./lib/database', path.join(pluginDir, 'lib', 'database.js')],
+  ['./lib/entities/project', path.join(pluginDir, 'lib', 'entities', 'project.js')],
+  ['./lib/entities/compound', path.join(pluginDir, 'lib', 'entities', 'compound.js')],
+  ['./lib/entities/data-asset', path.join(pluginDir, 'lib', 'entities', 'data-asset.js')],
+  ['./lib/entities/store', path.join(pluginDir, 'lib', 'entities', 'store.js')],
+  ['./lib/migrations/permanent-id', path.join(pluginDir, 'lib', 'migrations', 'permanent-id.js')],
   ['./lib/nmr', path.join(pluginDir, 'lib', 'nmr.js')],
   ['./lib/nmr-archive-modal', path.join(pluginDir, 'lib', 'nmr-archive-modal.js')],
   ['./lib/modal', path.join(pluginDir, 'lib', 'modal.js')],
@@ -12,6 +17,10 @@ const entries = [
   ['./lib/settings', path.join(pluginDir, 'lib', 'settings.js')],
   ['./lib/quick-create-modal', path.join(pluginDir, 'lib', 'quick-create-modal.js')],
   ['./lib/quick-create-command', path.join(pluginDir, 'lib', 'quick-create-command.js')],
+  ['./lib/modals/project-modal', path.join(pluginDir, 'lib', 'modals', 'project-modal.js')],
+  ['./lib/modals/compound-modal', path.join(pluginDir, 'lib', 'modals', 'compound-modal.js')],
+  ['./lib/modals/data-asset-modal', path.join(pluginDir, 'lib', 'modals', 'data-asset-modal.js')],
+  ['./lib/modals/migration-modal', path.join(pluginDir, 'lib', 'modals', 'migration-modal.js')],
   ['./lib/view', path.join(pluginDir, 'lib', 'view.js')],
   ['./main', path.join(pluginDir, 'main.src.js')]
 ];
@@ -26,9 +35,28 @@ function normalizeLocalRequires(id, source) {
       .replace("require('./nmr-archive-modal')", "require('./lib/nmr-archive-modal')")
       .replace("require('./quick-create-modal')", "require('./lib/quick-create-modal')")
       .replace("require('./experiment-modal')", "require('./lib/experiment-modal')")
-      .replace("require('./database')", "require('./lib/database')");
+      .replace("require('./database')", "require('./lib/database')")
+      .replace("require('./entities/store')", "require('./lib/entities/store')")
+      .replace("require('./modals/project-modal')", "require('./lib/modals/project-modal')")
+      .replace("require('./modals/compound-modal')", "require('./lib/modals/compound-modal')")
+      .replace("require('./modals/data-asset-modal')", "require('./lib/modals/data-asset-modal')")
+      .replace("require('./modals/migration-modal')", "require('./lib/modals/migration-modal')");
   }
-  if (id === './lib/nmr') return source.replace("require('./database')", "require('./lib/database')");
+  if (id === './lib/entities/store') {
+    return source
+      .replace("require('./project')", "require('./lib/entities/project')")
+      .replace("require('./compound')", "require('./lib/entities/compound')")
+      .replace("require('./data-asset')", "require('./lib/entities/data-asset')")
+      .replace("require('../data')", "require('./lib/data')");
+  }
+  if (id === './lib/migrations/permanent-id') {
+    return source.replace("require('../database')", "require('./lib/database')");
+  }
+  if (id === './lib/modals/project-modal') return source.replace("require('../entities/project')", "require('./lib/entities/project')").replace("require('../data')", "require('./lib/data')");
+  if (id === './lib/modals/compound-modal') return source.replace("require('../entities/compound')", "require('./lib/entities/compound')").replace("require('../data')", "require('./lib/data')");
+  if (id === './lib/modals/data-asset-modal') return source.replace("require('../entities/data-asset')", "require('./lib/entities/data-asset')").replace("require('../data')", "require('./lib/data')");
+  if (id === './lib/modals/migration-modal') return source.replace("require('../migrations/permanent-id')", "require('./lib/migrations/permanent-id')").replace("require('../data')", "require('./lib/data')");
+  if (id === './lib/nmr') return source.replace("require('./database')", "require('./lib/database')").replace("require('./entities/data-asset')", "require('./lib/entities/data-asset')").replace("require('./data')", "require('./lib/data')");
   if (id === './lib/settings') return source;
   if (id === './lib/quick-create-modal') return source;
   if (id === './lib/quick-create-command') return source;

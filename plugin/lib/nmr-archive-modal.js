@@ -1,4 +1,4 @@
-const { Modal, Notice } = require('obsidian');
+const { Modal, Notice, Setting } = require('obsidian');
 
 class NmrArchiveModal extends Modal {
   constructor(app, nmrInboxStore, relativePaths, options = {}) {
@@ -12,6 +12,7 @@ class NmrArchiveModal extends Modal {
     this.resultShown = false;
     this.ctaButton = null;
     this.body = null;
+    this.relations = { projectId: '', project: '', experimentId: '', experiment: '', compoundId: '', compound: '' };
   }
 
   onOpen() {
@@ -19,6 +20,7 @@ class NmrArchiveModal extends Modal {
     this.contentEl.createEl('h2', { text: '确认归档核磁原始数据' });
     this.body = this.contentEl.createDiv();
     this.body.createDiv({ cls: 'phdcc-empty', text: '正在检查来源、核种和目标路径…' });
+    this.renderRelations();
     const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
     const cancel = footer.createEl('button', { text: '取消', type: 'button' });
     cancel.addEventListener('click', () => this.close());
@@ -26,6 +28,26 @@ class NmrArchiveModal extends Modal {
     this.ctaButton.disabled = true;
     this.ctaButton.addEventListener('click', () => { void this.submit(); });
     void this.prepare();
+  }
+
+  renderRelations() {
+    const store = this.options.entityStore;
+    if (!store) return;
+    const container = this.contentEl.createDiv({ cls: 'phdcc-archive-relations' });
+    container.createEl('h3', { text: '科研关系（可选）' });
+    const projects = store.listProjects();
+    const experiments = store.listExperiments();
+    const compounds = store.listCompounds();
+    const add = (label, key, items, idKey = `${key}Id`) => {
+      new Setting(container).setName(label).addDropdown((dropdown) => {
+        dropdown.addOption('', '不关联');
+        items.forEach((item) => { if (item.id) dropdown.addOption(item.id, `${item.title} · ${item.id}`); });
+        dropdown.onChange((value) => { this.relations[idKey] = value; const item = items.find((candidate) => candidate.id === value); this.relations[key] = item?.title || ''; });
+      });
+    };
+    add('课题', 'project', projects);
+    add('实验', 'experiment', experiments);
+    add('化合物', 'compound', compounds);
   }
 
   async prepare() {
@@ -73,7 +95,7 @@ class NmrArchiveModal extends Modal {
     this.ctaButton.disabled = true;
     this.ctaButton.setText('归档中…');
     try {
-      const result = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath));
+      const result = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath), this.relations);
       if (typeof this.options.onArchived === 'function') await this.options.onArchived(result);
       if (result.status === 'completed') {
         this.close();
@@ -89,6 +111,7 @@ class NmrArchiveModal extends Modal {
         this.body.createDiv({ cls: 'phdcc-file-next', text: `成功 ${result.archived.length} · 失败 ${result.failed.length} · 未执行 ${result.skipped.length} · 审计异常 ${result.auditErrors?.length || 0}` });
         result.failed.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：${item.error}` }));
         result.auditErrors?.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：数据已移动但成功审计写入失败：${item.error}` }));
+        result.registrationErrors?.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：数据已移动但 DataAsset 登记失败：${item.error}` }));
         new Notice(`核磁归档完成：成功 ${result.archived.length}，失败 ${result.failed.length}，未执行 ${result.skipped.length}，审计异常 ${result.auditErrors?.length || 0}`);
       }
     } catch (error) {

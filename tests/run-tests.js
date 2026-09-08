@@ -94,6 +94,23 @@ test('managed, derived and duplicate identities are explicit', () => {
   assert.deepStrictEqual(duplicates, [{ id: 'EXP-1', paths: ['a.md', 'b.md'] }]);
 });
 
+test('v0.4 record types and relationship integrity detect missing, wrong and legacy references', () => {
+  assert.strictEqual(database.recordType('00-博士工作台/02-课题/p.md', { kind: 'project' }), 'project');
+  assert.strictEqual(database.recordType('00-博士工作台/04-化合物/c.md', { kind: 'compound' }), 'compound');
+  assert.strictEqual(database.recordType('00-博士工作台/04-数据资产/a.md', { kind: 'data-asset' }), 'data-asset');
+  const result = database.validateRelationships([
+    { id: 'PROJ-1', type: 'project', path: 'p.md' },
+    { id: 'CMP-1', type: 'compound', path: 'c.md', projectId: 'PROJ-1' },
+    { id: 'EXP-1', type: 'experiment', path: 'e.md', projectId: 'MISSING', compoundId: 'CMP-1' },
+    { id: 'DATA-1', type: 'data-asset', path: 'a.md', projectId: 'LEGACY-PROJECT-1', experimentId: 'PROJ-1', compoundId: 'DATA-1' }
+  ]);
+  assert.strictEqual(result.validRelationCount, 2);
+  assert.ok(result.issues.some((issue) => issue.type === 'missing_target'));
+  assert.ok(result.issues.some((issue) => issue.type === 'wrong_target_type'));
+  assert.ok(result.issues.some((issue) => issue.type === 'legacy_reference'));
+  assert.ok(result.issues.some((issue) => issue.type === 'self_reference'));
+});
+
 test('NMR nucleus classification and archive mapping', () => {
   assert.strictEqual(nmr.classifyNucleus('##$NUC1= <1H>'), '1H');
   assert.strictEqual(nmr.classifyNucleus('##$NUC1= <13C>'), '13C');
