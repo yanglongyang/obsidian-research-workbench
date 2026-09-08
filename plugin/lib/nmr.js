@@ -1,8 +1,10 @@
 const fs = require('fs/promises');
 const path = require('path');
 
-const NMR_INBOX_FOLDER = 'E:\\待处理数据\\待解核磁';
-const NMR_ARCHIVE_FOLDER = 'E:\\实验文档，数据\\核磁';
+const NMR_INBOX_FOLDER = '';
+const NMR_ARCHIVE_FOLDER = '';
+const NUCLEUS_ARCHIVE_MAP = { '1H': '氢谱', '13C': '碳谱' };
+const { AUDIT_FOLDER, AUDIT_FILE } = require('./database');
 
 const { spawn } = require('child_process');
 
@@ -27,13 +29,18 @@ function classifyNucleus(content) {
 function insideRoot(candidate, root) {
   const pathApi = isWindowsAbsolute(candidate) || isWindowsAbsolute(root) ? path.win32 : path;
   const relative = pathApi.relative(pathApi.resolve(root), pathApi.resolve(candidate));
-  return relative && !relative.startsWith(`..${pathApi.sep}`) && relative !== '..' && !pathApi.isAbsolute(relative);
+  return relative === '' || (!relative.startsWith(`..${pathApi.sep}`) && relative !== '..' && !pathApi.isAbsolute(relative));
 }
 
 function archiveCategory(nucleus) {
-  if (nucleus === '1H') return '氢谱';
-  if (nucleus === '13C') return '碳谱';
-  return '';
+  return NUCLEUS_ARCHIVE_MAP[nucleus] || '';
+}
+
+function archiveBatchStatus(archivedCount, failedCount) {
+  const archived = Number(archivedCount) || 0;
+  const failed = Number(failedCount) || 0;
+  if (failed === 0) return 'completed';
+  return archived > 0 ? 'partial_failure' : 'failed';
 }
 
 async function pathExists(candidate) {
@@ -109,10 +116,33 @@ async function scanDirectory(root, current, results) {
 }
 
 class NmrInboxStore {
+  constructor(plugin) {
+    this.plugin = plugin;
+    this.app = plugin?.app;
+  }
+
+  get inboxFolder() {
+    return String(this.plugin?.settings?.nmrInboxFolder || '').trim();
+  }
+
+  get archiveFolder() {
+    return String(this.plugin?.settings?.nmrArchiveFolder || '').trim();
+  }
+
+  getConfigurationError() {
+    if (!this.inboxFolder) return '尚未配置 NMR 待处理目录，请前往 设置 → 科研工作台设置。';
+    if (!this.archiveFolder) return '尚未配置 NMR 归档目录，请前往 设置 → 科研工作台设置。';
+    const inbox = resolveNmrPath(this.inboxFolder);
+    const archive = resolveNmrPath(this.archiveFolder);
+    if (inbox.toLowerCase() === archive.toLowerCase()) return 'NMR 待处理目录和归档目录不能相同。';
+    if (insideRoot(archive, inbox)) return 'NMR 归档目录不能位于待处理目录内部。';
+    return '';
+  }
+
   async openFolder(folder, app) {
     const target = resolveNmrPath(folder);
-    const root = resolveNmrPath(NMR_INBOX_FOLDER);
-    const archiveRoot = resolveNmrPath(NMR_ARCHIVE_FOLDER);
+    const root = resolveNmrPath(this.inboxFolder);
+    const archiveRoot = resolveNmrPath(this.archiveFolder);
     if (!insideRoot(target, root) && !insideRoot(target, archiveRoot)) throw new Error('拒绝打开工作区外的路径');
     await fs.access(target);
     if (process.platform !== 'win32') throw new Error('当前仅支持 Windows 文件夹跳转');
@@ -138,7 +168,9 @@ class NmrInboxStore {
   }
 
   async listPendingScans() {
-    const root = resolveNmrPath(NMR_INBOX_FOLDER);
+    const configurationError = this.getConfigurationError();
+    if (configurationError) throw new Error(configurationError);
+    const root = resolveNmrPath(this.inboxFolder);
     const rootStat = await fs.stat(root);
     if (!rootStat.isDirectory()) throw new Error('待解核磁目录不可用');
     const results = [];
@@ -151,8 +183,10 @@ class NmrInboxStore {
     if (!requested.length) return { plans: [], errors: ['请至少勾选一套待解核磁。'] };
     const scans = await this.listPendingScans();
     const byPath = new Map(scans.map((scan) => [scan.relativeScanPath, scan]));
-    const inboxRoot = resolveNmrPath(NMR_INBOX_FOLDER);
-    const archiveRoot = resolveNmrPath(NMR_ARCHIVE_FOLDER);
+    const configurationError = this.getConfigurationError();
+    if (configurationError) return { plans: [], errors: [configurationError] };
+    const inboxRoot = resolveNmrPath(this.inboxFolder);
+    const archiveRoot = resolveNmrPath(this.archiveFolder);
     const plans = [];
     const errors = [];
     for (const relativePath of requested) {
@@ -196,26 +230,83 @@ class NmrInboxStore {
     return { plans, errors };
   }
 
+  async writeAudit(entry) {
+    if (!this.app?.vault) return;
+    const segments = AUDIT_FOLDER.split('/');
+    let current = '';
+    for (const segment of segments) {
+      current = current ? `${current}/${segment}` : segment;
+      if (this.app.vault.getAbstractFileByPath(current)) continue;
+      try { await this.app.vault.createFolder(current); } catch (error) {
+        if (!this.app.vault.getAbstractFileByPath(current)) throw error;
+      }
+    }
+    const line = JSON.stringify(entry) + '\n';
+    const file = this.app.vault.getAbstractFileByPath(AUDIT_FILE);
+    if (!file) await this.app.vault.create(AUDIT_FILE, line);
+    else await this.app.vault.append(file, line);
+  }
+
   async archiveSelected(relativePaths) {
     const { plans, errors } = await this.preflightArchive(relativePaths);
-    if (errors.length) throw new Error(`预检未通过：${errors.join('；')}`);
-    const archiveRoot = resolveNmrPath(NMR_ARCHIVE_FOLDER);
-    const moved = [];
+    if (errors.length) return { status: 'failed', archived: [], failed: errors.map((error) => ({ error })), skipped: [], errors };
+    const archiveRoot = resolveNmrPath(this.archiveFolder);
+    const archived = [];
+    const failed = [];
+    const skipped = [];
     for (const plan of plans) {
-      if (!insideRoot(plan.sourcePath, resolveNmrPath(NMR_INBOX_FOLDER)) || !insideRoot(plan.destinationPath, archiveRoot)) {
-        throw new Error('归档路径校验失败');
+      if (!insideRoot(plan.sourcePath, resolveNmrPath(this.inboxFolder)) || !insideRoot(plan.destinationPath, archiveRoot)) {
+        failed.push({ plan, error: '归档路径校验失败' });
+        break;
       }
-      if (await pathExists(plan.destinationPath)) throw new Error(`${plan.relativeScanPath} 的目标已存在，已停止归档。`);
-      await fs.mkdir(path.win32.dirname(plan.destinationPath), { recursive: true });
-      await fs.rename(plan.sourcePath, plan.destinationPath);
-      moved.push(plan);
+      try {
+        if (await pathExists(plan.destinationPath)) throw new Error('目标已存在，不会覆盖。');
+        await fs.mkdir(path.win32.dirname(plan.destinationPath), { recursive: true });
+        await fs.rename(plan.sourcePath, plan.destinationPath);
+        archived.push(plan);
+        const entry = {
+          archive_id: `NMRARC-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+          timestamp: new Date().toISOString(),
+          source: plan.sourcePath,
+          destination: plan.destinationPath,
+          relative_path: plan.relativeScanPath,
+          nucleus: plan.nucleus,
+          file_count: plan.fileCount,
+          directory_count: plan.directoryCount,
+          total_bytes: plan.totalBytes,
+          experiment_id: '',
+          compound_id: '',
+          status: 'success'
+        };
+        try {
+          await this.writeAudit(entry);
+        } catch (auditError) {
+          console.error('[Research Workbench] NMR success audit failed', auditError);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failed.push({ plan, error: message });
+        try {
+          await this.writeAudit({ archive_id: `NMRARC-${Date.now().toString(36).toUpperCase()}`, timestamp: new Date().toISOString(), source: plan.sourcePath, destination: plan.destinationPath, relative_path: plan.relativeScanPath, nucleus: plan.nucleus, status: 'failed', error: message });
+        } catch (auditError) { console.error('[Research Workbench] NMR audit failed', auditError); }
+        break;
+      }
     }
-    return moved;
+    const firstFailedIndex = archived.length + failed.length;
+    for (let index = firstFailedIndex; index < plans.length; index += 1) skipped.push({ plan: plans[index], reason: '前一项归档失败，未执行' });
+    const status = archiveBatchStatus(archived.length, failed.length);
+    return { status, archived, failed, skipped, errors: [] };
   }
 }
 
 module.exports = {
   NMR_INBOX_FOLDER,
   NMR_ARCHIVE_FOLDER,
+  NUCLEUS_ARCHIVE_MAP,
+  classifyNucleus,
+  insideRoot,
+  archiveCategory,
+  archiveBatchStatus,
+  resolveNmrPath,
   NmrInboxStore
 };

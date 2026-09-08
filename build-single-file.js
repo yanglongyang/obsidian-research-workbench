@@ -4,11 +4,12 @@ const path = require('path');
 const pluginDir = path.join(__dirname, 'plugin');
 const entries = [
   ['./lib/data', path.join(pluginDir, 'lib', 'data.js')],
+  ['./lib/database', path.join(pluginDir, 'lib', 'database.js')],
   ['./lib/nmr', path.join(pluginDir, 'lib', 'nmr.js')],
   ['./lib/nmr-archive-modal', path.join(pluginDir, 'lib', 'nmr-archive-modal.js')],
   ['./lib/modal', path.join(pluginDir, 'lib', 'modal.js')],
   ['./lib/experiment-modal', path.join(pluginDir, 'lib', 'experiment-modal.js')],
-  ['./lib/database', path.join(pluginDir, 'lib', 'database.js')],
+  ['./lib/settings', path.join(pluginDir, 'lib', 'settings.js')],
   ['./lib/view', path.join(pluginDir, 'lib', 'view.js')],
   ['./main', path.join(pluginDir, 'main.src.js')]
 ];
@@ -24,8 +25,15 @@ function normalizeLocalRequires(id, source) {
       .replace("require('./experiment-modal')", "require('./lib/experiment-modal')")
       .replace("require('./database')", "require('./lib/database')");
   }
+  if (id === './lib/nmr') return source.replace("require('./database')", "require('./lib/database')");
+  if (id === './lib/settings') return source;
   if (id === './lib/experiment-modal') return source.replace("require('./data')", "require('./lib/data')");
-  if (id === './main') return source.replace("require('./lib/view')", "require('./lib/view')");
+  if (id === './main') {
+    return source
+      .replace("require('./lib/view')", "require('./lib/view')")
+      .replace("require('./lib/settings')", "require('./lib/settings')")
+      .replace("require('./lib/database')", "require('./lib/database')");
+  }
   return source;
 }
 

@@ -34,7 +34,7 @@ function formatMinutes(value) {
 function isPathInside(path, folder) {
   const p = normalizePath(path || '');
   const f = normalizePath(folder || '').replace(/\/+$/, '');
-  if (!p || !f) return false;
+  if (!p || !f || p.split('/').includes('..') || f.split('/').includes('..')) return false;
   return p === f || p.startsWith(`${f}/`);
 }
 
@@ -55,6 +55,19 @@ function sanitizeTitleSegment(title) {
 function localCompactTimestamp(date = new Date()) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${String(date.getFullYear()).padStart(4, '0')}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function generateRecordId(prefix = 'REC') {
+  const normalizedPrefix = String(prefix || 'REC').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '') || 'REC';
+  const timestamp = Date.now().toString(36).toUpperCase().padStart(10, '0');
+  let random = '';
+  try {
+    if (globalThis.crypto?.randomUUID) random = globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase();
+  } catch (error) {
+    // Older Electron runtimes may not expose randomUUID; the fallback remains collision-resistant enough here.
+  }
+  if (!random) random = Math.random().toString(36).slice(2, 12).toUpperCase().padEnd(10, '0');
+  return `${normalizedPrefix}-${timestamp}${random}`;
 }
 
 function isValidDateString(value) {
@@ -121,6 +134,7 @@ function buildExperimentPath(vault, title, experimentDate) {
 function renderTaskContent(task) {
   return [
     '---',
+    `record_id: ${yamlString(task.recordId)}`,
     'kind: workbench-task',
     `title: ${yamlString(task.title)}`,
     'status: todo',
@@ -145,7 +159,10 @@ function renderTaskContent(task) {
 function renderExperimentContent(experiment) {
   return [
     '---',
+    `record_id: ${yamlString(experiment.recordId)}`,
     'kind: experiment',
+    `experiment_type: ${yamlString(experiment.experimentType)}`,
+    `project_id: ${yamlString(experiment.projectId)}`,
     `title: ${yamlString(experiment.title)}`,
     `project: ${yamlString(experiment.project)}`,
     `status: ${yamlString(experiment.status)}`,
@@ -206,6 +223,7 @@ class TaskStore {
       if (!frontmatter || frontmatter.kind !== 'workbench-task') continue;
       tasks.push({
         file,
+        recordId: typeof frontmatter.record_id === 'string' ? frontmatter.record_id.trim() : '',
         title: typeof frontmatter.title === 'string' && frontmatter.title.trim() ? frontmatter.title : file.basename,
         status: STATUS_VALUES.includes(frontmatter.status) ? frontmatter.status : 'todo',
         priority: PRIORITY_VALUES.includes(frontmatter.priority) ? frontmatter.priority : 'medium',
@@ -233,6 +251,7 @@ class TaskStore {
     await ensureTaskFolder(this.app.vault);
     const taskPath = buildTaskPath(this.app.vault, title);
     const content = renderTaskContent({
+      recordId: generateRecordId('TASK'),
       title,
       priority,
       category: String(input.category || ''),
@@ -257,6 +276,9 @@ class TaskStore {
     await ensureExperimentFolder(this.app.vault);
     const experimentPath = buildExperimentPath(this.app.vault, title, experimentDate);
     const content = renderExperimentContent({
+      recordId: generateRecordId('EXP'),
+      experimentType: String(input.experimentType || 'general').trim() || 'general',
+      projectId: String(input.projectId || '').trim(),
       title,
       experimentDate,
       status,
@@ -310,6 +332,9 @@ module.exports = {
   LITERATURE_FOLDERS,
   WRITING_FOLDER,
   localDate,
+  generateRecordId,
+  buildTaskPath,
+  buildExperimentPath,
   formatMinutes,
   isPathInside,
   TaskStore,

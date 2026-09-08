@@ -1,0 +1,10 @@
+{
+  "name": "obsidian-research-workbench",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Local-first Obsidian research workbench plugin",
+  "scripts": {
+    "build": "node build-single-file.js",
+    "test": "node tests/run-tests.js"
+  }
+}

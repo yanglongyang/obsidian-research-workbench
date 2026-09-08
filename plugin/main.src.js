@@ -1,8 +1,12 @@
 const { Plugin } = require('obsidian');
 const { VIEW_TYPE, WorkbenchView } = require('./lib/view');
+const { mergeSettings, ResearchWorkbenchSettingTab } = require('./lib/settings');
+const { isManagedPath, isDerivedPath } = require('./lib/database');
 
 module.exports = class PhDCommandCenterPlugin extends Plugin {
   async onload() {
+    this.settings = mergeSettings(await this.loadData());
+    this.saveSettings = async () => this.saveData(this.settings);
     this.refreshTimer = null;
     this.registerView(VIEW_TYPE, (leaf) => new WorkbenchView(leaf, this));
 
@@ -16,7 +20,11 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
       callback: () => { void this.activateView(); }
     });
 
-    const scheduleRefresh = () => {
+    this.addSettingTab(new ResearchWorkbenchSettingTab(this.app, this));
+
+    const scheduleRefresh = (file, oldPath) => {
+      const filePath = file?.path || (typeof oldPath === 'string' ? oldPath : '');
+      if (filePath && (!isManagedPath(filePath) || isDerivedPath(filePath))) return;
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = window.setTimeout(() => {
         for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
@@ -31,7 +39,9 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
     this.registerEvent(this.app.vault.on('rename', scheduleRefresh));
     this.register(() => window.clearTimeout(this.refreshTimer));
 
-    this.app.workspace.onLayoutReady(() => { void this.activateView(); });
+    this.app.workspace.onLayoutReady(() => {
+      if (this.settings.openOnStartup) void this.activateView();
+    });
   }
 
   async activateView() {

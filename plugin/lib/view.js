@@ -13,7 +13,7 @@ const {
 } = require('./data');
 const { TaskModal } = require('./modal');
 const { ExperimentModal } = require('./experiment-modal');
-const { NMR_INBOX_FOLDER, NMR_ARCHIVE_FOLDER, NmrInboxStore } = require('./nmr');
+const { NmrInboxStore } = require('./nmr');
 const { NmrArchiveModal } = require('./nmr-archive-modal');
 const { ResearchDatabase } = require('./database');
 
@@ -71,7 +71,7 @@ class WorkbenchView extends ItemView {
     this.calendarCursor = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-01`;
     this.taskStore = new TaskStore(plugin);
     this.researchDatabase = new ResearchDatabase(plugin);
-    this.nmrInboxStore = new NmrInboxStore();
+    this.nmrInboxStore = new NmrInboxStore(plugin);
     this.tasks = [];
     this.nmrScans = [];
     this.nmrError = '';
@@ -110,6 +110,8 @@ class WorkbenchView extends ItemView {
       await this.researchDatabase.sync();
     } catch (error) {
       this.researchDatabase.records = [];
+      this.researchDatabase.error = error instanceof Error ? error.message : String(error);
+      console.error('[Research Workbench] refresh failed', error);
     }
     if (this.activeSection === 'nmr-inbox') await this.refreshNmrInbox(false);
     this.root.empty();
@@ -274,9 +276,9 @@ class WorkbenchView extends ItemView {
     const selected = [...this.selectedNmrPaths];
     if (!selected.length) return void new Notice('请先勾选要归档的核磁原始数据');
     new NmrArchiveModal(this.app, this.nmrInboxStore, selected, {
-      onArchived: async () => {
+      onArchived: async (result) => {
         this.selectedNmrPaths.clear();
-        await this.refreshNmrInbox();
+        if (result?.status === 'completed' || result?.status === 'partial_failure') await this.refreshNmrInbox();
       }
     }).open();
   }
@@ -495,6 +497,10 @@ class WorkbenchView extends ItemView {
         card.createDiv({ cls: 'phdcc-stat-value', text: String(value) });
       });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    if (this.researchDatabase.error) {
+      card.createDiv({ cls: 'phdcc-empty', text: `数据库扫描失败：${this.researchDatabase.error}` });
+      return;
+    }
     if (!visible.length) {
       card.createDiv({ cls: 'phdcc-empty', text: query ? '没有匹配的科研记录' : '数据库暂无记录' });
       return;
@@ -562,10 +568,12 @@ class WorkbenchView extends ItemView {
       card.createDiv({ cls: 'phdcc-stat-value', text: value });
     });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
-    const description = card.createDiv({ cls: 'phdcc-file-meta', text: `来源：${NMR_INBOX_FOLDER}　·　未来归档：${NMR_ARCHIVE_FOLDER}` });
+    const description = card.createDiv({ cls: 'phdcc-file-meta', text: `来源：${this.nmrInboxStore.inboxFolder || '未配置'}　·　未来归档：${this.nmrInboxStore.archiveFolder || '未配置'}` });
     description.addClass('phdcc-nmr-note');
     if (this.nmrError) {
       card.createDiv({ cls: 'phdcc-empty', text: `读取失败：${this.nmrError}` });
+      const settingsHint = card.createEl('button', { cls: 'phdcc-empty-add', text: '打开插件设置', attr: { type: 'button' } });
+      settingsHint.addEventListener('click', () => this.app.setting.open());
       return;
     }
     if (!visibleScans.length) {

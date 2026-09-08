@@ -9,6 +9,7 @@ class NmrArchiveModal extends Modal {
     this.plans = [];
     this.errors = [];
     this.saving = false;
+    this.resultShown = false;
     this.ctaButton = null;
     this.body = null;
   }
@@ -59,15 +60,29 @@ class NmrArchiveModal extends Modal {
   }
 
   async submit() {
+    if (this.resultShown) return void this.close();
     if (this.saving || this.errors.length || !this.plans.length) return;
     this.saving = true;
     this.ctaButton.disabled = true;
     this.ctaButton.setText('归档中…');
     try {
-      const moved = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath));
-      if (typeof this.options.onArchived === 'function') await this.options.onArchived(moved);
-      this.close();
-      new Notice(`已归档 ${moved.length} 套核磁原始数据`);
+      const result = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath));
+      if (typeof this.options.onArchived === 'function') await this.options.onArchived(result);
+      if (result.status === 'completed') {
+        this.close();
+        new Notice(`已归档 ${result.archived.length} 套核磁原始数据`);
+      } else {
+        this.saving = false;
+        this.resultShown = true;
+        this.ctaButton.disabled = false;
+        this.ctaButton.setText('关闭结果');
+        this.ctaButton.onclick = () => this.close();
+        this.body.empty();
+        this.body.createDiv({ cls: 'phdcc-empty', text: `归档结果：${result.status === 'partial_failure' ? '部分成功' : '全部失败'}` });
+        this.body.createDiv({ cls: 'phdcc-file-next', text: `成功 ${result.archived.length} · 失败 ${result.failed.length} · 未执行 ${result.skipped.length}` });
+        result.failed.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：${item.error}` }));
+        new Notice(`核磁归档完成：成功 ${result.archived.length}，失败 ${result.failed.length}，未执行 ${result.skipped.length}`);
+      }
     } catch (error) {
       this.saving = false;
       this.ctaButton.disabled = false;

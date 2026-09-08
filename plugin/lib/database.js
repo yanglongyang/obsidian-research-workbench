@@ -1,5 +1,9 @@
 const DB_FOLDER = '00-博士工作台/应用数据/数据库';
 const DB_FILE = `${DB_FOLDER}/records.json`;
+const AUDIT_FOLDER = '00-博士工作台/应用数据/审计';
+const AUDIT_FILE = `${AUDIT_FOLDER}/nmr-archive.jsonl`;
+const DATABASE_SCHEMA_VERSION = 2;
+const MANAGED_FOLDERS = ['00-博士工作台', '实验记录', '文献', '文献阅读', 'DMAC_AIE_PET_调研'];
 
 function normalizePath(value) {
   return String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
@@ -8,7 +12,16 @@ function normalizePath(value) {
 function pathInside(filePath, folder) {
   const file = normalizePath(filePath);
   const root = normalizePath(folder);
-  return file === root || file.startsWith(`${root}/`);
+  return Boolean(file && root && (file === root || file.startsWith(`${root}/`)));
+}
+
+function isManagedPath(filePath) {
+  return MANAGED_FOLDERS.some((folder) => pathInside(filePath, folder));
+}
+
+function isDerivedPath(filePath) {
+  const path = normalizePath(filePath);
+  return path === DB_FILE || path === AUDIT_FILE || pathInside(path, DB_FOLDER) || pathInside(path, AUDIT_FOLDER);
 }
 
 function simpleHash(value) {
@@ -17,11 +30,17 @@ function simpleHash(value) {
     hash ^= char.charCodeAt(0);
     hash = Math.imul(hash, 16777619);
   }
-  return (hash >>> 0).toString(16).padStart(8, '0');
+  return (hash >>> 0).toString(16).padStart(8, '0').toUpperCase();
 }
 
 function firstString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function firstArray(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (typeof value === 'string') return value.split(/[ ,]+/).map((item) => item.trim()).filter(Boolean);
+  return [];
 }
 
 function recordType(filePath, frontmatter) {
@@ -36,11 +55,14 @@ function recordType(filePath, frontmatter) {
   return pathInside(path, '00-博士工作台') ? 'note' : '';
 }
 
+function identityFor(filePath, frontmatter, type) {
+  const supplied = firstString(frontmatter.record_id);
+  if (supplied) return { id: supplied, identitySource: 'frontmatter' };
+  return { id: `LEGACY-${String(type || 'record').toUpperCase()}-${simpleHash(filePath)}`, identitySource: 'legacy-path' };
+}
+
 function frontmatterTags(frontmatter) {
-  const tags = frontmatter?.tags;
-  if (Array.isArray(tags)) return tags.map((tag) => String(tag)).filter(Boolean);
-  if (typeof tags === 'string') return tags.split(/[ ,]+/).map((tag) => tag.trim()).filter(Boolean);
-  return [];
+  return firstArray(frontmatter?.tags);
 }
 
 class ResearchDatabase {
@@ -49,6 +71,7 @@ class ResearchDatabase {
     this.app = plugin.app;
     this.records = [];
     this.lastSync = '';
+    this.error = '';
   }
 
   async ensureFolder() {
@@ -68,13 +91,15 @@ class ResearchDatabase {
   collectRecords() {
     const records = [];
     for (const file of this.app.vault.getMarkdownFiles()) {
-      const type = recordType(file.path, this.app.metadataCache.getFileCache(file)?.frontmatter || {});
-      if (!type) continue;
+      if (!isManagedPath(file.path) || isDerivedPath(file.path)) continue;
       const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
+      const type = recordType(file.path, frontmatter);
+      if (!type) continue;
       const path = normalizePath(file.path);
-      const tags = frontmatterTags(frontmatter);
+      const identity = identityFor(path, frontmatter, type);
       records.push({
-        id: firstString(frontmatter.record_id) || `REC-${simpleHash(path)}`,
+        id: identity.id,
+        identitySource: identity.identitySource,
         type,
         title: firstString(frontmatter.title) || file.basename,
         path,
@@ -85,9 +110,14 @@ class ResearchDatabase {
         category: firstString(frontmatter.category) || firstString(frontmatter.project),
         date: firstString(frontmatter.due) || firstString(frontmatter.experiment_date) || firstString(frontmatter.date),
         project: firstString(frontmatter.project),
+        projectId: firstString(frontmatter.project_id),
+        compoundId: firstString(frontmatter.compound_id),
+        dataAssetId: firstString(frontmatter.data_asset_id),
+        parentId: firstString(frontmatter.parent_id),
+        relatedIds: firstArray(frontmatter.related_ids),
         sample: firstString(frontmatter.sample),
         dataPath: firstString(frontmatter.data_path),
-        tags,
+        tags: frontmatterTags(frontmatter),
         updated: firstString(frontmatter.updated) || new Date(file.stat.mtime).toISOString(),
         size: file.stat.size
       });
@@ -96,23 +126,31 @@ class ResearchDatabase {
   }
 
   async sync() {
-    await this.ensureFolder();
-    const records = this.collectRecords();
-    const payload = JSON.stringify({ version: 1, updated: new Date().toISOString(), records }, null, 2) + '\n';
-    const existing = this.app.vault.getAbstractFileByPath(DB_FILE);
-    if (!existing) await this.app.vault.create(DB_FILE, payload);
-    else if (existing.extension === 'json') {
-      const old = await this.app.vault.read(existing);
-      try {
-        const oldData = JSON.parse(old);
-        if (JSON.stringify(oldData.records || []) !== JSON.stringify(records)) await this.app.vault.modify(existing, payload);
-      } catch (error) {
-        await this.app.vault.modify(existing, payload);
+    this.error = '';
+    try {
+      await this.ensureFolder();
+      const records = this.collectRecords();
+      const payloadData = { version: DATABASE_SCHEMA_VERSION, updated: new Date().toISOString(), records };
+      const payload = JSON.stringify(payloadData, null, 2) + '\n';
+      const existing = this.app.vault.getAbstractFileByPath(DB_FILE);
+      if (!existing) await this.app.vault.create(DB_FILE, payload);
+      else if (existing.extension === 'json') {
+        const old = await this.app.vault.read(existing);
+        try {
+          const oldData = JSON.parse(old);
+          if (JSON.stringify(oldData.records || []) !== JSON.stringify(records) || oldData.version !== DATABASE_SCHEMA_VERSION) await this.app.vault.modify(existing, payload);
+        } catch (error) {
+          await this.app.vault.modify(existing, payload);
+        }
       }
+      this.records = records;
+      this.lastSync = new Date().toISOString();
+      return records;
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+      console.error('[Research Workbench] database sync failed', error);
+      throw error;
     }
-    this.records = records;
-    this.lastSync = new Date().toISOString();
-    return records;
   }
 
   async refresh() {
@@ -120,4 +158,19 @@ class ResearchDatabase {
   }
 }
 
-module.exports = { DB_FOLDER, DB_FILE, ResearchDatabase };
+module.exports = {
+  DB_FOLDER,
+  DB_FILE,
+  AUDIT_FOLDER,
+  AUDIT_FILE,
+  DATABASE_SCHEMA_VERSION,
+  MANAGED_FOLDERS,
+  normalizePath,
+  pathInside,
+  isManagedPath,
+  isDerivedPath,
+  simpleHash,
+  recordType,
+  identityFor,
+  ResearchDatabase
+};

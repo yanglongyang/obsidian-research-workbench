@@ -39,7 +39,7 @@ function formatMinutes(value) {
 function isPathInside(path, folder) {
   const p = normalizePath(path || '');
   const f = normalizePath(folder || '').replace(/\/+$/, '');
-  if (!p || !f) return false;
+  if (!p || !f || p.split('/').includes('..') || f.split('/').includes('..')) return false;
   return p === f || p.startsWith(`${f}/`);
 }
 
@@ -60,6 +60,19 @@ function sanitizeTitleSegment(title) {
 function localCompactTimestamp(date = new Date()) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${String(date.getFullYear()).padStart(4, '0')}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function generateRecordId(prefix = 'REC') {
+  const normalizedPrefix = String(prefix || 'REC').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '') || 'REC';
+  const timestamp = Date.now().toString(36).toUpperCase().padStart(10, '0');
+  let random = '';
+  try {
+    if (globalThis.crypto?.randomUUID) random = globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase();
+  } catch (error) {
+    // Older Electron runtimes may not expose randomUUID; the fallback remains collision-resistant enough here.
+  }
+  if (!random) random = Math.random().toString(36).slice(2, 12).toUpperCase().padEnd(10, '0');
+  return `${normalizedPrefix}-${timestamp}${random}`;
 }
 
 function isValidDateString(value) {
@@ -126,6 +139,7 @@ function buildExperimentPath(vault, title, experimentDate) {
 function renderTaskContent(task) {
   return [
     '---',
+    `record_id: ${yamlString(task.recordId)}`,
     'kind: workbench-task',
     `title: ${yamlString(task.title)}`,
     'status: todo',
@@ -150,7 +164,10 @@ function renderTaskContent(task) {
 function renderExperimentContent(experiment) {
   return [
     '---',
+    `record_id: ${yamlString(experiment.recordId)}`,
     'kind: experiment',
+    `experiment_type: ${yamlString(experiment.experimentType)}`,
+    `project_id: ${yamlString(experiment.projectId)}`,
     `title: ${yamlString(experiment.title)}`,
     `project: ${yamlString(experiment.project)}`,
     `status: ${yamlString(experiment.status)}`,
@@ -211,6 +228,7 @@ class TaskStore {
       if (!frontmatter || frontmatter.kind !== 'workbench-task') continue;
       tasks.push({
         file,
+        recordId: typeof frontmatter.record_id === 'string' ? frontmatter.record_id.trim() : '',
         title: typeof frontmatter.title === 'string' && frontmatter.title.trim() ? frontmatter.title : file.basename,
         status: STATUS_VALUES.includes(frontmatter.status) ? frontmatter.status : 'todo',
         priority: PRIORITY_VALUES.includes(frontmatter.priority) ? frontmatter.priority : 'medium',
@@ -238,6 +256,7 @@ class TaskStore {
     await ensureTaskFolder(this.app.vault);
     const taskPath = buildTaskPath(this.app.vault, title);
     const content = renderTaskContent({
+      recordId: generateRecordId('TASK'),
       title,
       priority,
       category: String(input.category || ''),
@@ -262,6 +281,9 @@ class TaskStore {
     await ensureExperimentFolder(this.app.vault);
     const experimentPath = buildExperimentPath(this.app.vault, title, experimentDate);
     const content = renderExperimentContent({
+      recordId: generateRecordId('EXP'),
+      experimentType: String(input.experimentType || 'general').trim() || 'general',
+      projectId: String(input.projectId || '').trim(),
       title,
       experimentDate,
       status,
@@ -315,6 +337,9 @@ module.exports = {
   LITERATURE_FOLDERS,
   WRITING_FOLDER,
   localDate,
+  generateRecordId,
+  buildTaskPath,
+  buildExperimentPath,
   formatMinutes,
   isPathInside,
   TaskStore,
@@ -322,12 +347,193 @@ module.exports = {
 };
 
 },
+"./lib/database": function (module, exports, require) {
+const DB_FOLDER = '00-博士工作台/应用数据/数据库';
+const DB_FILE = `${DB_FOLDER}/records.json`;
+const AUDIT_FOLDER = '00-博士工作台/应用数据/审计';
+const AUDIT_FILE = `${AUDIT_FOLDER}/nmr-archive.jsonl`;
+const DATABASE_SCHEMA_VERSION = 2;
+const MANAGED_FOLDERS = ['00-博士工作台', '实验记录', '文献', '文献阅读', 'DMAC_AIE_PET_调研'];
+
+function normalizePath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+function pathInside(filePath, folder) {
+  const file = normalizePath(filePath);
+  const root = normalizePath(folder);
+  return Boolean(file && root && (file === root || file.startsWith(`${root}/`)));
+}
+
+function isManagedPath(filePath) {
+  return MANAGED_FOLDERS.some((folder) => pathInside(filePath, folder));
+}
+
+function isDerivedPath(filePath) {
+  const path = normalizePath(filePath);
+  return path === DB_FILE || path === AUDIT_FILE || pathInside(path, DB_FOLDER) || pathInside(path, AUDIT_FOLDER);
+}
+
+function simpleHash(value) {
+  let hash = 2166136261;
+  for (const char of String(value || '')) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0').toUpperCase();
+}
+
+function firstString(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function firstArray(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (typeof value === 'string') return value.split(/[ ,]+/).map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function recordType(filePath, frontmatter) {
+  const path = normalizePath(filePath);
+  if (frontmatter?.kind === 'workbench-task') return 'task';
+  if (frontmatter?.kind === 'experiment' || pathInside(path, '00-博士工作台/03-实验') || pathInside(path, '实验记录')) return 'experiment';
+  if (pathInside(path, '00-博士工作台/02-课题')) return 'project';
+  if (pathInside(path, '00-博士工作台/04-数据')) return 'data';
+  if (pathInside(path, '00-博士工作台/05-文献') || pathInside(path, '文献') || pathInside(path, '文献阅读') || pathInside(path, 'DMAC_AIE_PET_调研')) return 'literature';
+  if (pathInside(path, '00-博士工作台/06-写作')) return 'writing';
+  if (pathInside(path, '00-博士工作台/07-进展')) return 'progress';
+  return pathInside(path, '00-博士工作台') ? 'note' : '';
+}
+
+function identityFor(filePath, frontmatter, type) {
+  const supplied = firstString(frontmatter.record_id);
+  if (supplied) return { id: supplied, identitySource: 'frontmatter' };
+  return { id: `LEGACY-${String(type || 'record').toUpperCase()}-${simpleHash(filePath)}`, identitySource: 'legacy-path' };
+}
+
+function frontmatterTags(frontmatter) {
+  return firstArray(frontmatter?.tags);
+}
+
+class ResearchDatabase {
+  constructor(plugin) {
+    this.plugin = plugin;
+    this.app = plugin.app;
+    this.records = [];
+    this.lastSync = '';
+    this.error = '';
+  }
+
+  async ensureFolder() {
+    const segments = DB_FOLDER.split('/');
+    let current = '';
+    for (const segment of segments) {
+      current = current ? `${current}/${segment}` : segment;
+      if (this.app.vault.getAbstractFileByPath(current)) continue;
+      try {
+        await this.app.vault.createFolder(current);
+      } catch (error) {
+        if (!this.app.vault.getAbstractFileByPath(current)) throw error;
+      }
+    }
+  }
+
+  collectRecords() {
+    const records = [];
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!isManagedPath(file.path) || isDerivedPath(file.path)) continue;
+      const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
+      const type = recordType(file.path, frontmatter);
+      if (!type) continue;
+      const path = normalizePath(file.path);
+      const identity = identityFor(path, frontmatter, type);
+      records.push({
+        id: identity.id,
+        identitySource: identity.identitySource,
+        type,
+        title: firstString(frontmatter.title) || file.basename,
+        path,
+        folder: path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '',
+        kind: firstString(frontmatter.kind),
+        status: firstString(frontmatter.status),
+        priority: firstString(frontmatter.priority),
+        category: firstString(frontmatter.category) || firstString(frontmatter.project),
+        date: firstString(frontmatter.due) || firstString(frontmatter.experiment_date) || firstString(frontmatter.date),
+        project: firstString(frontmatter.project),
+        projectId: firstString(frontmatter.project_id),
+        compoundId: firstString(frontmatter.compound_id),
+        dataAssetId: firstString(frontmatter.data_asset_id),
+        parentId: firstString(frontmatter.parent_id),
+        relatedIds: firstArray(frontmatter.related_ids),
+        sample: firstString(frontmatter.sample),
+        dataPath: firstString(frontmatter.data_path),
+        tags: frontmatterTags(frontmatter),
+        updated: firstString(frontmatter.updated) || new Date(file.stat.mtime).toISOString(),
+        size: file.stat.size
+      });
+    }
+    return records.sort((a, b) => String(b.updated).localeCompare(String(a.updated)) || a.title.localeCompare(b.title));
+  }
+
+  async sync() {
+    this.error = '';
+    try {
+      await this.ensureFolder();
+      const records = this.collectRecords();
+      const payloadData = { version: DATABASE_SCHEMA_VERSION, updated: new Date().toISOString(), records };
+      const payload = JSON.stringify(payloadData, null, 2) + '\n';
+      const existing = this.app.vault.getAbstractFileByPath(DB_FILE);
+      if (!existing) await this.app.vault.create(DB_FILE, payload);
+      else if (existing.extension === 'json') {
+        const old = await this.app.vault.read(existing);
+        try {
+          const oldData = JSON.parse(old);
+          if (JSON.stringify(oldData.records || []) !== JSON.stringify(records) || oldData.version !== DATABASE_SCHEMA_VERSION) await this.app.vault.modify(existing, payload);
+        } catch (error) {
+          await this.app.vault.modify(existing, payload);
+        }
+      }
+      this.records = records;
+      this.lastSync = new Date().toISOString();
+      return records;
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+      console.error('[Research Workbench] database sync failed', error);
+      throw error;
+    }
+  }
+
+  async refresh() {
+    return this.sync();
+  }
+}
+
+module.exports = {
+  DB_FOLDER,
+  DB_FILE,
+  AUDIT_FOLDER,
+  AUDIT_FILE,
+  DATABASE_SCHEMA_VERSION,
+  MANAGED_FOLDERS,
+  normalizePath,
+  pathInside,
+  isManagedPath,
+  isDerivedPath,
+  simpleHash,
+  recordType,
+  identityFor,
+  ResearchDatabase
+};
+
+},
 "./lib/nmr": function (module, exports, require) {
 const fs = require('fs/promises');
 const path = require('path');
 
-const NMR_INBOX_FOLDER = 'E:\\待处理数据\\待解核磁';
-const NMR_ARCHIVE_FOLDER = 'E:\\实验文档，数据\\核磁';
+const NMR_INBOX_FOLDER = '';
+const NMR_ARCHIVE_FOLDER = '';
+const NUCLEUS_ARCHIVE_MAP = { '1H': '氢谱', '13C': '碳谱' };
+const { AUDIT_FOLDER, AUDIT_FILE } = require('./lib/database');
 
 const { spawn } = require('child_process');
 
@@ -352,13 +558,18 @@ function classifyNucleus(content) {
 function insideRoot(candidate, root) {
   const pathApi = isWindowsAbsolute(candidate) || isWindowsAbsolute(root) ? path.win32 : path;
   const relative = pathApi.relative(pathApi.resolve(root), pathApi.resolve(candidate));
-  return relative && !relative.startsWith(`..${pathApi.sep}`) && relative !== '..' && !pathApi.isAbsolute(relative);
+  return relative === '' || (!relative.startsWith(`..${pathApi.sep}`) && relative !== '..' && !pathApi.isAbsolute(relative));
 }
 
 function archiveCategory(nucleus) {
-  if (nucleus === '1H') return '氢谱';
-  if (nucleus === '13C') return '碳谱';
-  return '';
+  return NUCLEUS_ARCHIVE_MAP[nucleus] || '';
+}
+
+function archiveBatchStatus(archivedCount, failedCount) {
+  const archived = Number(archivedCount) || 0;
+  const failed = Number(failedCount) || 0;
+  if (failed === 0) return 'completed';
+  return archived > 0 ? 'partial_failure' : 'failed';
 }
 
 async function pathExists(candidate) {
@@ -434,10 +645,33 @@ async function scanDirectory(root, current, results) {
 }
 
 class NmrInboxStore {
+  constructor(plugin) {
+    this.plugin = plugin;
+    this.app = plugin?.app;
+  }
+
+  get inboxFolder() {
+    return String(this.plugin?.settings?.nmrInboxFolder || '').trim();
+  }
+
+  get archiveFolder() {
+    return String(this.plugin?.settings?.nmrArchiveFolder || '').trim();
+  }
+
+  getConfigurationError() {
+    if (!this.inboxFolder) return '尚未配置 NMR 待处理目录，请前往 设置 → 科研工作台设置。';
+    if (!this.archiveFolder) return '尚未配置 NMR 归档目录，请前往 设置 → 科研工作台设置。';
+    const inbox = resolveNmrPath(this.inboxFolder);
+    const archive = resolveNmrPath(this.archiveFolder);
+    if (inbox.toLowerCase() === archive.toLowerCase()) return 'NMR 待处理目录和归档目录不能相同。';
+    if (insideRoot(archive, inbox)) return 'NMR 归档目录不能位于待处理目录内部。';
+    return '';
+  }
+
   async openFolder(folder, app) {
     const target = resolveNmrPath(folder);
-    const root = resolveNmrPath(NMR_INBOX_FOLDER);
-    const archiveRoot = resolveNmrPath(NMR_ARCHIVE_FOLDER);
+    const root = resolveNmrPath(this.inboxFolder);
+    const archiveRoot = resolveNmrPath(this.archiveFolder);
     if (!insideRoot(target, root) && !insideRoot(target, archiveRoot)) throw new Error('拒绝打开工作区外的路径');
     await fs.access(target);
     if (process.platform !== 'win32') throw new Error('当前仅支持 Windows 文件夹跳转');
@@ -463,7 +697,9 @@ class NmrInboxStore {
   }
 
   async listPendingScans() {
-    const root = resolveNmrPath(NMR_INBOX_FOLDER);
+    const configurationError = this.getConfigurationError();
+    if (configurationError) throw new Error(configurationError);
+    const root = resolveNmrPath(this.inboxFolder);
     const rootStat = await fs.stat(root);
     if (!rootStat.isDirectory()) throw new Error('待解核磁目录不可用');
     const results = [];
@@ -476,8 +712,10 @@ class NmrInboxStore {
     if (!requested.length) return { plans: [], errors: ['请至少勾选一套待解核磁。'] };
     const scans = await this.listPendingScans();
     const byPath = new Map(scans.map((scan) => [scan.relativeScanPath, scan]));
-    const inboxRoot = resolveNmrPath(NMR_INBOX_FOLDER);
-    const archiveRoot = resolveNmrPath(NMR_ARCHIVE_FOLDER);
+    const configurationError = this.getConfigurationError();
+    if (configurationError) return { plans: [], errors: [configurationError] };
+    const inboxRoot = resolveNmrPath(this.inboxFolder);
+    const archiveRoot = resolveNmrPath(this.archiveFolder);
     const plans = [];
     const errors = [];
     for (const relativePath of requested) {
@@ -521,27 +759,84 @@ class NmrInboxStore {
     return { plans, errors };
   }
 
+  async writeAudit(entry) {
+    if (!this.app?.vault) return;
+    const segments = AUDIT_FOLDER.split('/');
+    let current = '';
+    for (const segment of segments) {
+      current = current ? `${current}/${segment}` : segment;
+      if (this.app.vault.getAbstractFileByPath(current)) continue;
+      try { await this.app.vault.createFolder(current); } catch (error) {
+        if (!this.app.vault.getAbstractFileByPath(current)) throw error;
+      }
+    }
+    const line = JSON.stringify(entry) + '\n';
+    const file = this.app.vault.getAbstractFileByPath(AUDIT_FILE);
+    if (!file) await this.app.vault.create(AUDIT_FILE, line);
+    else await this.app.vault.append(file, line);
+  }
+
   async archiveSelected(relativePaths) {
     const { plans, errors } = await this.preflightArchive(relativePaths);
-    if (errors.length) throw new Error(`预检未通过：${errors.join('；')}`);
-    const archiveRoot = resolveNmrPath(NMR_ARCHIVE_FOLDER);
-    const moved = [];
+    if (errors.length) return { status: 'failed', archived: [], failed: errors.map((error) => ({ error })), skipped: [], errors };
+    const archiveRoot = resolveNmrPath(this.archiveFolder);
+    const archived = [];
+    const failed = [];
+    const skipped = [];
     for (const plan of plans) {
-      if (!insideRoot(plan.sourcePath, resolveNmrPath(NMR_INBOX_FOLDER)) || !insideRoot(plan.destinationPath, archiveRoot)) {
-        throw new Error('归档路径校验失败');
+      if (!insideRoot(plan.sourcePath, resolveNmrPath(this.inboxFolder)) || !insideRoot(plan.destinationPath, archiveRoot)) {
+        failed.push({ plan, error: '归档路径校验失败' });
+        break;
       }
-      if (await pathExists(plan.destinationPath)) throw new Error(`${plan.relativeScanPath} 的目标已存在，已停止归档。`);
-      await fs.mkdir(path.win32.dirname(plan.destinationPath), { recursive: true });
-      await fs.rename(plan.sourcePath, plan.destinationPath);
-      moved.push(plan);
+      try {
+        if (await pathExists(plan.destinationPath)) throw new Error('目标已存在，不会覆盖。');
+        await fs.mkdir(path.win32.dirname(plan.destinationPath), { recursive: true });
+        await fs.rename(plan.sourcePath, plan.destinationPath);
+        archived.push(plan);
+        const entry = {
+          archive_id: `NMRARC-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+          timestamp: new Date().toISOString(),
+          source: plan.sourcePath,
+          destination: plan.destinationPath,
+          relative_path: plan.relativeScanPath,
+          nucleus: plan.nucleus,
+          file_count: plan.fileCount,
+          directory_count: plan.directoryCount,
+          total_bytes: plan.totalBytes,
+          experiment_id: '',
+          compound_id: '',
+          status: 'success'
+        };
+        try {
+          await this.writeAudit(entry);
+        } catch (auditError) {
+          console.error('[Research Workbench] NMR success audit failed', auditError);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failed.push({ plan, error: message });
+        try {
+          await this.writeAudit({ archive_id: `NMRARC-${Date.now().toString(36).toUpperCase()}`, timestamp: new Date().toISOString(), source: plan.sourcePath, destination: plan.destinationPath, relative_path: plan.relativeScanPath, nucleus: plan.nucleus, status: 'failed', error: message });
+        } catch (auditError) { console.error('[Research Workbench] NMR audit failed', auditError); }
+        break;
+      }
     }
-    return moved;
+    const firstFailedIndex = archived.length + failed.length;
+    for (let index = firstFailedIndex; index < plans.length; index += 1) skipped.push({ plan: plans[index], reason: '前一项归档失败，未执行' });
+    const status = archiveBatchStatus(archived.length, failed.length);
+    return { status, archived, failed, skipped, errors: [] };
   }
 }
 
 module.exports = {
   NMR_INBOX_FOLDER,
   NMR_ARCHIVE_FOLDER,
+  NUCLEUS_ARCHIVE_MAP,
+  classifyNucleus,
+  insideRoot,
+  archiveCategory,
+  archiveBatchStatus,
+  resolveNmrPath,
   NmrInboxStore
 };
 
@@ -558,6 +853,7 @@ class NmrArchiveModal extends Modal {
     this.plans = [];
     this.errors = [];
     this.saving = false;
+    this.resultShown = false;
     this.ctaButton = null;
     this.body = null;
   }
@@ -608,15 +904,29 @@ class NmrArchiveModal extends Modal {
   }
 
   async submit() {
+    if (this.resultShown) return void this.close();
     if (this.saving || this.errors.length || !this.plans.length) return;
     this.saving = true;
     this.ctaButton.disabled = true;
     this.ctaButton.setText('归档中…');
     try {
-      const moved = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath));
-      if (typeof this.options.onArchived === 'function') await this.options.onArchived(moved);
-      this.close();
-      new Notice(`已归档 ${moved.length} 套核磁原始数据`);
+      const result = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath));
+      if (typeof this.options.onArchived === 'function') await this.options.onArchived(result);
+      if (result.status === 'completed') {
+        this.close();
+        new Notice(`已归档 ${result.archived.length} 套核磁原始数据`);
+      } else {
+        this.saving = false;
+        this.resultShown = true;
+        this.ctaButton.disabled = false;
+        this.ctaButton.setText('关闭结果');
+        this.ctaButton.onclick = () => this.close();
+        this.body.empty();
+        this.body.createDiv({ cls: 'phdcc-empty', text: `归档结果：${result.status === 'partial_failure' ? '部分成功' : '全部失败'}` });
+        this.body.createDiv({ cls: 'phdcc-file-next', text: `成功 ${result.archived.length} · 失败 ${result.failed.length} · 未执行 ${result.skipped.length}` });
+        result.failed.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：${item.error}` }));
+        new Notice(`核磁归档完成：成功 ${result.archived.length}，失败 ${result.failed.length}，未执行 ${result.skipped.length}`);
+      }
     } catch (error) {
       this.saving = false;
       this.ctaButton.disabled = false;
@@ -784,6 +1094,8 @@ class ExperimentModal extends Modal {
       experimentDate: /^\d{4}-\d{2}-\d{2}$/.test(options.experimentDate || '') ? options.experimentDate : localDate(),
       status: 'doing',
       project: '',
+      projectId: '',
+      experimentType: 'general',
       sample: '',
       objective: '',
       protocol: '',
@@ -815,6 +1127,13 @@ class ExperimentModal extends Modal {
     });
 
     this.addText('关联课题（可选）', '例如：[[课题名称]]', 'project');
+    this.addText('课题 ID（可选）', '例如：PROJ-01K…', 'projectId');
+    new Setting(contentEl).setName('实验类型').addDropdown((dropdown) => {
+      [['general', '通用实验'], ['synthesis', '合成'], ['characterization', '表征'], ['analysis', '分析']]
+        .forEach(([value, label]) => dropdown.addOption(value, label));
+      dropdown.setValue(this.state.experimentType);
+      dropdown.onChange((value) => { this.state.experimentType = value; });
+    });
     this.addText('样本 / 材料（可选）', '例如：细胞系、批号或样本编号', 'sample');
     this.addArea('目标 / 假设（可选）', '本次实验想验证什么？', 'objective', 3);
     this.addArea('实验过程（可选）', '关键步骤、条件和参数', 'protocol', 4);
@@ -895,130 +1214,82 @@ class ExperimentModal extends Modal {
 module.exports = { ExperimentModal };
 
 },
-"./lib/database": function (module, exports, require) {
-const DB_FOLDER = '00-博士工作台/应用数据/数据库';
-const DB_FILE = `${DB_FOLDER}/records.json`;
+"./lib/settings": function (module, exports, require) {
+const { PluginSettingTab, Setting, Notice } = require('obsidian');
 
-function normalizePath(value) {
-  return String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+const DEFAULT_SETTINGS = {
+  openOnStartup: false,
+  workbenchRootFolder: '00-博士工作台',
+  nmrInboxFolder: '',
+  nmrArchiveFolder: ''
+};
+
+function mergeSettings(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    ...DEFAULT_SETTINGS,
+    ...source,
+    openOnStartup: Boolean(source.openOnStartup ?? DEFAULT_SETTINGS.openOnStartup),
+    workbenchRootFolder: String(source.workbenchRootFolder ?? DEFAULT_SETTINGS.workbenchRootFolder).trim(),
+    nmrInboxFolder: String(source.nmrInboxFolder ?? DEFAULT_SETTINGS.nmrInboxFolder).trim(),
+    nmrArchiveFolder: String(source.nmrArchiveFolder ?? DEFAULT_SETTINGS.nmrArchiveFolder).trim()
+  };
 }
 
-function pathInside(filePath, folder) {
-  const file = normalizePath(filePath);
-  const root = normalizePath(folder);
-  return file === root || file.startsWith(`${root}/`);
-}
-
-function simpleHash(value) {
-  let hash = 2166136261;
-  for (const char of String(value || '')) {
-    hash ^= char.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
-}
-
-function firstString(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function recordType(filePath, frontmatter) {
-  const path = normalizePath(filePath);
-  if (frontmatter?.kind === 'workbench-task') return 'task';
-  if (frontmatter?.kind === 'experiment' || pathInside(path, '00-博士工作台/03-实验') || pathInside(path, '实验记录')) return 'experiment';
-  if (pathInside(path, '00-博士工作台/02-课题')) return 'project';
-  if (pathInside(path, '00-博士工作台/04-数据')) return 'data';
-  if (pathInside(path, '00-博士工作台/05-文献') || pathInside(path, '文献') || pathInside(path, '文献阅读') || pathInside(path, 'DMAC_AIE_PET_调研')) return 'literature';
-  if (pathInside(path, '00-博士工作台/06-写作')) return 'writing';
-  if (pathInside(path, '00-博士工作台/07-进展')) return 'progress';
-  return pathInside(path, '00-博士工作台') ? 'note' : '';
-}
-
-function frontmatterTags(frontmatter) {
-  const tags = frontmatter?.tags;
-  if (Array.isArray(tags)) return tags.map((tag) => String(tag)).filter(Boolean);
-  if (typeof tags === 'string') return tags.split(/[ ,]+/).map((tag) => tag.trim()).filter(Boolean);
-  return [];
-}
-
-class ResearchDatabase {
-  constructor(plugin) {
+class ResearchWorkbenchSettingTab extends PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
     this.plugin = plugin;
-    this.app = plugin.app;
-    this.records = [];
-    this.lastSync = '';
   }
 
-  async ensureFolder() {
-    const segments = DB_FOLDER.split('/');
-    let current = '';
-    for (const segment of segments) {
-      current = current ? `${current}/${segment}` : segment;
-      if (this.app.vault.getAbstractFileByPath(current)) continue;
-      try {
-        await this.app.vault.createFolder(current);
-      } catch (error) {
-        if (!this.app.vault.getAbstractFileByPath(current)) throw error;
-      }
-    }
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    containerEl.createEl('h2', { text: '科研工作台设置' });
+    containerEl.createEl('p', { text: 'Markdown 笔记仍是事实来源；这些设置只控制插件索引和核磁文件操作。' });
+
+    new Setting(containerEl)
+      .setName('启动时打开科研工作台')
+      .setDesc('关闭后，插件加载不会自动抢占当前工作区。')
+      .addToggle((toggle) => toggle
+        .setValue(Boolean(this.plugin.settings.openOnStartup))
+        .onChange(async (value) => {
+          this.plugin.settings.openOnStartup = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('工作台根目录')
+      .setDesc('用于说明和未来目录管理；当前数据库仍兼容既有 00-博士工作台 结构。')
+      .addText((text) => text
+        .setValue(this.plugin.settings.workbenchRootFolder)
+        .onChange(async (value) => {
+          this.plugin.settings.workbenchRootFolder = value.trim();
+          await this.plugin.saveSettings();
+        }));
+
+    containerEl.createEl('h3', { text: '核磁文件夹' });
+    containerEl.createEl('p', { text: '路径只在实际使用时检查。插件不会自动移动、删除或覆盖原始数据。' });
+    this.addPathSetting(containerEl, 'NMR 待处理目录', '扫描 Bruker 原始采集目录的文件夹。', 'nmrInboxFolder');
+    this.addPathSetting(containerEl, 'NMR 归档目录', '按氢谱/碳谱分类的目标根目录。', 'nmrArchiveFolder');
   }
 
-  collectRecords() {
-    const records = [];
-    for (const file of this.app.vault.getMarkdownFiles()) {
-      const type = recordType(file.path, this.app.metadataCache.getFileCache(file)?.frontmatter || {});
-      if (!type) continue;
-      const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
-      const path = normalizePath(file.path);
-      const tags = frontmatterTags(frontmatter);
-      records.push({
-        id: firstString(frontmatter.record_id) || `REC-${simpleHash(path)}`,
-        type,
-        title: firstString(frontmatter.title) || file.basename,
-        path,
-        folder: path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '',
-        kind: firstString(frontmatter.kind),
-        status: firstString(frontmatter.status),
-        priority: firstString(frontmatter.priority),
-        category: firstString(frontmatter.category) || firstString(frontmatter.project),
-        date: firstString(frontmatter.due) || firstString(frontmatter.experiment_date) || firstString(frontmatter.date),
-        project: firstString(frontmatter.project),
-        sample: firstString(frontmatter.sample),
-        dataPath: firstString(frontmatter.data_path),
-        tags,
-        updated: firstString(frontmatter.updated) || new Date(file.stat.mtime).toISOString(),
-        size: file.stat.size
-      });
-    }
-    return records.sort((a, b) => String(b.updated).localeCompare(String(a.updated)) || a.title.localeCompare(b.title));
-  }
-
-  async sync() {
-    await this.ensureFolder();
-    const records = this.collectRecords();
-    const payload = JSON.stringify({ version: 1, updated: new Date().toISOString(), records }, null, 2) + '\n';
-    const existing = this.app.vault.getAbstractFileByPath(DB_FILE);
-    if (!existing) await this.app.vault.create(DB_FILE, payload);
-    else if (existing.extension === 'json') {
-      const old = await this.app.vault.read(existing);
-      try {
-        const oldData = JSON.parse(old);
-        if (JSON.stringify(oldData.records || []) !== JSON.stringify(records)) await this.app.vault.modify(existing, payload);
-      } catch (error) {
-        await this.app.vault.modify(existing, payload);
-      }
-    }
-    this.records = records;
-    this.lastSync = new Date().toISOString();
-    return records;
-  }
-
-  async refresh() {
-    return this.sync();
+  addPathSetting(containerEl, name, description, key) {
+    new Setting(containerEl)
+      .setName(name)
+      .setDesc(description)
+      .addText((text) => text
+        .setPlaceholder('例如：D:\\科研数据\\待解核磁')
+        .setValue(this.plugin.settings[key] || '')
+        .onChange(async (value) => {
+          this.plugin.settings[key] = value.trim();
+          await this.plugin.saveSettings();
+          if (!this.plugin.settings[key]) new Notice(`${name}为空，NMR页面将提示配置路径。`);
+        }));
   }
 }
 
-module.exports = { DB_FOLDER, DB_FILE, ResearchDatabase };
+module.exports = { DEFAULT_SETTINGS, mergeSettings, ResearchWorkbenchSettingTab };
 
 },
 "./lib/view": function (module, exports, require) {
@@ -1037,7 +1308,7 @@ const {
 } = require('./lib/data');
 const { TaskModal } = require('./lib/modal');
 const { ExperimentModal } = require('./lib/experiment-modal');
-const { NMR_INBOX_FOLDER, NMR_ARCHIVE_FOLDER, NmrInboxStore } = require('./lib/nmr');
+const { NmrInboxStore } = require('./lib/nmr');
 const { NmrArchiveModal } = require('./lib/nmr-archive-modal');
 const { ResearchDatabase } = require('./lib/database');
 
@@ -1095,7 +1366,7 @@ class WorkbenchView extends ItemView {
     this.calendarCursor = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-01`;
     this.taskStore = new TaskStore(plugin);
     this.researchDatabase = new ResearchDatabase(plugin);
-    this.nmrInboxStore = new NmrInboxStore();
+    this.nmrInboxStore = new NmrInboxStore(plugin);
     this.tasks = [];
     this.nmrScans = [];
     this.nmrError = '';
@@ -1134,6 +1405,8 @@ class WorkbenchView extends ItemView {
       await this.researchDatabase.sync();
     } catch (error) {
       this.researchDatabase.records = [];
+      this.researchDatabase.error = error instanceof Error ? error.message : String(error);
+      console.error('[Research Workbench] refresh failed', error);
     }
     if (this.activeSection === 'nmr-inbox') await this.refreshNmrInbox(false);
     this.root.empty();
@@ -1298,9 +1571,9 @@ class WorkbenchView extends ItemView {
     const selected = [...this.selectedNmrPaths];
     if (!selected.length) return void new Notice('请先勾选要归档的核磁原始数据');
     new NmrArchiveModal(this.app, this.nmrInboxStore, selected, {
-      onArchived: async () => {
+      onArchived: async (result) => {
         this.selectedNmrPaths.clear();
-        await this.refreshNmrInbox();
+        if (result?.status === 'completed' || result?.status === 'partial_failure') await this.refreshNmrInbox();
       }
     }).open();
   }
@@ -1519,6 +1792,10 @@ class WorkbenchView extends ItemView {
         card.createDiv({ cls: 'phdcc-stat-value', text: String(value) });
       });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    if (this.researchDatabase.error) {
+      card.createDiv({ cls: 'phdcc-empty', text: `数据库扫描失败：${this.researchDatabase.error}` });
+      return;
+    }
     if (!visible.length) {
       card.createDiv({ cls: 'phdcc-empty', text: query ? '没有匹配的科研记录' : '数据库暂无记录' });
       return;
@@ -1586,10 +1863,12 @@ class WorkbenchView extends ItemView {
       card.createDiv({ cls: 'phdcc-stat-value', text: value });
     });
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
-    const description = card.createDiv({ cls: 'phdcc-file-meta', text: `来源：${NMR_INBOX_FOLDER}　·　未来归档：${NMR_ARCHIVE_FOLDER}` });
+    const description = card.createDiv({ cls: 'phdcc-file-meta', text: `来源：${this.nmrInboxStore.inboxFolder || '未配置'}　·　未来归档：${this.nmrInboxStore.archiveFolder || '未配置'}` });
     description.addClass('phdcc-nmr-note');
     if (this.nmrError) {
       card.createDiv({ cls: 'phdcc-empty', text: `读取失败：${this.nmrError}` });
+      const settingsHint = card.createEl('button', { cls: 'phdcc-empty-add', text: '打开插件设置', attr: { type: 'button' } });
+      settingsHint.addEventListener('click', () => this.app.setting.open());
       return;
     }
     if (!visibleScans.length) {
@@ -1690,9 +1969,13 @@ module.exports = { VIEW_TYPE, WorkbenchView };
 "./main": function (module, exports, require) {
 const { Plugin } = require('obsidian');
 const { VIEW_TYPE, WorkbenchView } = require('./lib/view');
+const { mergeSettings, ResearchWorkbenchSettingTab } = require('./lib/settings');
+const { isManagedPath, isDerivedPath } = require('./lib/database');
 
 module.exports = class PhDCommandCenterPlugin extends Plugin {
   async onload() {
+    this.settings = mergeSettings(await this.loadData());
+    this.saveSettings = async () => this.saveData(this.settings);
     this.refreshTimer = null;
     this.registerView(VIEW_TYPE, (leaf) => new WorkbenchView(leaf, this));
 
@@ -1706,7 +1989,11 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
       callback: () => { void this.activateView(); }
     });
 
-    const scheduleRefresh = () => {
+    this.addSettingTab(new ResearchWorkbenchSettingTab(this.app, this));
+
+    const scheduleRefresh = (file, oldPath) => {
+      const filePath = file?.path || (typeof oldPath === 'string' ? oldPath : '');
+      if (filePath && (!isManagedPath(filePath) || isDerivedPath(filePath))) return;
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = window.setTimeout(() => {
         for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
@@ -1721,7 +2008,9 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
     this.registerEvent(this.app.vault.on('rename', scheduleRefresh));
     this.register(() => window.clearTimeout(this.refreshTimer));
 
-    this.app.workspace.onLayoutReady(() => { void this.activateView(); });
+    this.app.workspace.onLayoutReady(() => {
+      if (this.settings.openOnStartup) void this.activateView();
+    });
   }
 
   async activateView() {

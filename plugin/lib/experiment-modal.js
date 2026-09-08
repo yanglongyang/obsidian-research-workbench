@@ -18,6 +18,8 @@ class ExperimentModal extends Modal {
       experimentDate: /^\d{4}-\d{2}-\d{2}$/.test(options.experimentDate || '') ? options.experimentDate : localDate(),
       status: 'doing',
       project: '',
+      projectId: '',
+      experimentType: 'general',
       sample: '',
       objective: '',
       protocol: '',
@@ -49,6 +51,13 @@ class ExperimentModal extends Modal {
     });
 
     this.addText('关联课题（可选）', '例如：[[课题名称]]', 'project');
+    this.addText('课题 ID（可选）', '例如：PROJ-01K…', 'projectId');
+    new Setting(contentEl).setName('实验类型').addDropdown((dropdown) => {
+      [['general', '通用实验'], ['synthesis', '合成'], ['characterization', '表征'], ['analysis', '分析']]
+        .forEach(([value, label]) => dropdown.addOption(value, label));
+      dropdown.setValue(this.state.experimentType);
+      dropdown.onChange((value) => { this.state.experimentType = value; });
+    });
     this.addText('样本 / 材料（可选）', '例如：细胞系、批号或样本编号', 'sample');
     this.addArea('目标 / 假设（可选）', '本次实验想验证什么？', 'objective', 3);
     this.addArea('实验过程（可选）', '关键步骤、条件和参数', 'protocol', 4);
