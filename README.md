@@ -1,6 +1,6 @@
 # Obsidian 科研工作台 / Research Workbench
 
-一个本地优先的 Obsidian 科研信息系统，当前版本为 `v0.2.0` Data Foundation。
+一个本地优先的 Obsidian 科研信息系统，当前版本为 `v0.2.0.1` Data Foundation Closure。
 
 ## 架构原则
 
@@ -16,6 +16,7 @@
 - NMR Bruker 原始目录扫描、¹H/¹³C 分类、预检和显式确认归档。
 - NMR 归档不自动删除、不覆盖目标，批量操作会报告成功、失败和未执行项目。
 - 插件设置中可配置 NMR 待处理目录、归档目录和启动行为。
+- 当前版本仅支持同一磁盘分区内归档；跨盘移动会在预检阶段拒绝。
 
 ## 构建与测试
 

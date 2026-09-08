@@ -18,6 +18,16 @@ function resolveNmrPath(value) {
   return isWindowsAbsolute(raw) ? path.win32.normalize(raw) : path.resolve(raw);
 }
 
+function volumeRoot(value) {
+  const raw = String(value || '');
+  if (/^[A-Za-z]:[\\/]/.test(raw)) return raw.slice(0, 2).toUpperCase();
+  if (raw.startsWith('\\\\')) {
+    const parts = raw.replace(/^\\\\/, '').split(/[\\/]+/).filter(Boolean);
+    return parts.length >= 2 ? `\\\\${parts[0]}\\${parts[1]}`.toLowerCase() : raw.toLowerCase();
+  }
+  return '';
+}
+
 function classifyNucleus(content) {
   const match = String(content || '').match(/^##\$NUC1=\s*<([^>]+)>/m);
   const nucleus = match ? match[1].trim() : '';
@@ -214,6 +224,10 @@ class NmrInboxStore {
         errors.push(`${relativePath}：目标路径不安全。`);
         continue;
       }
+      if (volumeRoot(sourcePath) && volumeRoot(destinationPath) && volumeRoot(sourcePath) !== volumeRoot(destinationPath)) {
+        errors.push(`${relativePath}：来源和归档目录位于不同磁盘分区，当前版本拒绝跨盘移动。`);
+        continue;
+      }
       if (await pathExists(destinationPath)) {
         errors.push(`${relativePath}：目标已存在，不会覆盖。`);
         continue;
@@ -254,9 +268,31 @@ class NmrInboxStore {
     const archived = [];
     const failed = [];
     const skipped = [];
+    const auditErrors = [];
     for (const plan of plans) {
       if (!insideRoot(plan.sourcePath, resolveNmrPath(this.inboxFolder)) || !insideRoot(plan.destinationPath, archiveRoot)) {
         failed.push({ plan, error: '归档路径校验失败' });
+        break;
+      }
+      const operationId = `NMRARC-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      const auditBase = {
+        archive_id: operationId,
+        timestamp: new Date().toISOString(),
+        source: plan.sourcePath,
+        destination: plan.destinationPath,
+        relative_path: plan.relativeScanPath,
+        nucleus: plan.nucleus,
+        file_count: plan.fileCount,
+        directory_count: plan.directoryCount,
+        total_bytes: plan.totalBytes,
+        experiment_id: '',
+        compound_id: ''
+      };
+      try {
+        await this.writeAudit({ ...auditBase, status: 'started' });
+      } catch (auditError) {
+        const message = auditError instanceof Error ? auditError.message : String(auditError);
+        failed.push({ plan, error: `无法写入归档开始审计，未移动数据：${message}` });
         break;
       }
       try {
@@ -264,38 +300,26 @@ class NmrInboxStore {
         await fs.mkdir(path.win32.dirname(plan.destinationPath), { recursive: true });
         await fs.rename(plan.sourcePath, plan.destinationPath);
         archived.push(plan);
-        const entry = {
-          archive_id: `NMRARC-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-          timestamp: new Date().toISOString(),
-          source: plan.sourcePath,
-          destination: plan.destinationPath,
-          relative_path: plan.relativeScanPath,
-          nucleus: plan.nucleus,
-          file_count: plan.fileCount,
-          directory_count: plan.directoryCount,
-          total_bytes: plan.totalBytes,
-          experiment_id: '',
-          compound_id: '',
-          status: 'success'
-        };
         try {
-          await this.writeAudit(entry);
+          await this.writeAudit({ ...auditBase, timestamp: new Date().toISOString(), status: 'success' });
         } catch (auditError) {
+          const message = auditError instanceof Error ? auditError.message : String(auditError);
+          auditErrors.push({ plan, error: message });
           console.error('[Research Workbench] NMR success audit failed', auditError);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         failed.push({ plan, error: message });
         try {
-          await this.writeAudit({ archive_id: `NMRARC-${Date.now().toString(36).toUpperCase()}`, timestamp: new Date().toISOString(), source: plan.sourcePath, destination: plan.destinationPath, relative_path: plan.relativeScanPath, nucleus: plan.nucleus, status: 'failed', error: message });
+          await this.writeAudit({ ...auditBase, timestamp: new Date().toISOString(), status: 'failed', error: message });
         } catch (auditError) { console.error('[Research Workbench] NMR audit failed', auditError); }
         break;
       }
     }
     const firstFailedIndex = archived.length + failed.length;
     for (let index = firstFailedIndex; index < plans.length; index += 1) skipped.push({ plan: plans[index], reason: '前一项归档失败，未执行' });
-    const status = archiveBatchStatus(archived.length, failed.length);
-    return { status, archived, failed, skipped, errors: [] };
+    const status = archiveBatchStatus(archived.length, failed.length + auditErrors.length);
+    return { status, archived, failed, skipped, auditErrors, errors: [] };
   }
 }
 
@@ -308,5 +332,6 @@ module.exports = {
   archiveCategory,
   archiveBatchStatus,
   resolveNmrPath,
+  volumeRoot,
   NmrInboxStore
 };

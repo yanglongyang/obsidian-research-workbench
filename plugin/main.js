@@ -374,6 +374,24 @@ function isDerivedPath(filePath) {
   return path === DB_FILE || path === AUDIT_FILE || pathInside(path, DB_FOLDER) || pathInside(path, AUDIT_FOLDER);
 }
 
+function affectsManagedPath(paths) {
+  return (Array.isArray(paths) ? paths : [paths])
+    .filter(Boolean)
+    .some((filePath) => isManagedPath(filePath) && !isDerivedPath(filePath));
+}
+
+function findDuplicateIds(records) {
+  const byId = new Map();
+  (Array.isArray(records) ? records : []).forEach((record) => {
+    if (!record?.id) return;
+    if (!byId.has(record.id)) byId.set(record.id, []);
+    byId.get(record.id).push(record);
+  });
+  return [...byId.entries()]
+    .filter(([, matches]) => matches.length > 1)
+    .map(([id, matches]) => ({ id, paths: matches.map((record) => record.path) }));
+}
+
 function simpleHash(value) {
   let hash = 2166136261;
   for (const char of String(value || '')) {
@@ -420,6 +438,7 @@ class ResearchDatabase {
     this.plugin = plugin;
     this.app = plugin.app;
     this.records = [];
+    this.duplicateIds = [];
     this.lastSync = '';
     this.error = '';
   }
@@ -493,6 +512,7 @@ class ResearchDatabase {
           await this.app.vault.modify(existing, payload);
         }
       }
+      this.duplicateIds = findDuplicateIds(records);
       this.records = records;
       this.lastSync = new Date().toISOString();
       return records;
@@ -519,6 +539,8 @@ module.exports = {
   pathInside,
   isManagedPath,
   isDerivedPath,
+  affectsManagedPath,
+  findDuplicateIds,
   simpleHash,
   recordType,
   identityFor,
@@ -545,6 +567,16 @@ function isWindowsAbsolute(value) {
 function resolveNmrPath(value) {
   const raw = String(value || '');
   return isWindowsAbsolute(raw) ? path.win32.normalize(raw) : path.resolve(raw);
+}
+
+function volumeRoot(value) {
+  const raw = String(value || '');
+  if (/^[A-Za-z]:[\\/]/.test(raw)) return raw.slice(0, 2).toUpperCase();
+  if (raw.startsWith('\\\\')) {
+    const parts = raw.replace(/^\\\\/, '').split(/[\\/]+/).filter(Boolean);
+    return parts.length >= 2 ? `\\\\${parts[0]}\\${parts[1]}`.toLowerCase() : raw.toLowerCase();
+  }
+  return '';
 }
 
 function classifyNucleus(content) {
@@ -743,6 +775,10 @@ class NmrInboxStore {
         errors.push(`${relativePath}：目标路径不安全。`);
         continue;
       }
+      if (volumeRoot(sourcePath) && volumeRoot(destinationPath) && volumeRoot(sourcePath) !== volumeRoot(destinationPath)) {
+        errors.push(`${relativePath}：来源和归档目录位于不同磁盘分区，当前版本拒绝跨盘移动。`);
+        continue;
+      }
       if (await pathExists(destinationPath)) {
         errors.push(`${relativePath}：目标已存在，不会覆盖。`);
         continue;
@@ -783,9 +819,31 @@ class NmrInboxStore {
     const archived = [];
     const failed = [];
     const skipped = [];
+    const auditErrors = [];
     for (const plan of plans) {
       if (!insideRoot(plan.sourcePath, resolveNmrPath(this.inboxFolder)) || !insideRoot(plan.destinationPath, archiveRoot)) {
         failed.push({ plan, error: '归档路径校验失败' });
+        break;
+      }
+      const operationId = `NMRARC-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      const auditBase = {
+        archive_id: operationId,
+        timestamp: new Date().toISOString(),
+        source: plan.sourcePath,
+        destination: plan.destinationPath,
+        relative_path: plan.relativeScanPath,
+        nucleus: plan.nucleus,
+        file_count: plan.fileCount,
+        directory_count: plan.directoryCount,
+        total_bytes: plan.totalBytes,
+        experiment_id: '',
+        compound_id: ''
+      };
+      try {
+        await this.writeAudit({ ...auditBase, status: 'started' });
+      } catch (auditError) {
+        const message = auditError instanceof Error ? auditError.message : String(auditError);
+        failed.push({ plan, error: `无法写入归档开始审计，未移动数据：${message}` });
         break;
       }
       try {
@@ -793,38 +851,26 @@ class NmrInboxStore {
         await fs.mkdir(path.win32.dirname(plan.destinationPath), { recursive: true });
         await fs.rename(plan.sourcePath, plan.destinationPath);
         archived.push(plan);
-        const entry = {
-          archive_id: `NMRARC-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-          timestamp: new Date().toISOString(),
-          source: plan.sourcePath,
-          destination: plan.destinationPath,
-          relative_path: plan.relativeScanPath,
-          nucleus: plan.nucleus,
-          file_count: plan.fileCount,
-          directory_count: plan.directoryCount,
-          total_bytes: plan.totalBytes,
-          experiment_id: '',
-          compound_id: '',
-          status: 'success'
-        };
         try {
-          await this.writeAudit(entry);
+          await this.writeAudit({ ...auditBase, timestamp: new Date().toISOString(), status: 'success' });
         } catch (auditError) {
+          const message = auditError instanceof Error ? auditError.message : String(auditError);
+          auditErrors.push({ plan, error: message });
           console.error('[Research Workbench] NMR success audit failed', auditError);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         failed.push({ plan, error: message });
         try {
-          await this.writeAudit({ archive_id: `NMRARC-${Date.now().toString(36).toUpperCase()}`, timestamp: new Date().toISOString(), source: plan.sourcePath, destination: plan.destinationPath, relative_path: plan.relativeScanPath, nucleus: plan.nucleus, status: 'failed', error: message });
+          await this.writeAudit({ ...auditBase, timestamp: new Date().toISOString(), status: 'failed', error: message });
         } catch (auditError) { console.error('[Research Workbench] NMR audit failed', auditError); }
         break;
       }
     }
     const firstFailedIndex = archived.length + failed.length;
     for (let index = firstFailedIndex; index < plans.length; index += 1) skipped.push({ plan: plans[index], reason: '前一项归档失败，未执行' });
-    const status = archiveBatchStatus(archived.length, failed.length);
-    return { status, archived, failed, skipped, errors: [] };
+    const status = archiveBatchStatus(archived.length, failed.length + auditErrors.length);
+    return { status, archived, failed, skipped, auditErrors, errors: [] };
   }
 }
 
@@ -837,6 +883,7 @@ module.exports = {
   archiveCategory,
   archiveBatchStatus,
   resolveNmrPath,
+  volumeRoot,
   NmrInboxStore
 };
 
@@ -923,9 +970,10 @@ class NmrArchiveModal extends Modal {
         this.ctaButton.onclick = () => this.close();
         this.body.empty();
         this.body.createDiv({ cls: 'phdcc-empty', text: `归档结果：${result.status === 'partial_failure' ? '部分成功' : '全部失败'}` });
-        this.body.createDiv({ cls: 'phdcc-file-next', text: `成功 ${result.archived.length} · 失败 ${result.failed.length} · 未执行 ${result.skipped.length}` });
+        this.body.createDiv({ cls: 'phdcc-file-next', text: `成功 ${result.archived.length} · 失败 ${result.failed.length} · 未执行 ${result.skipped.length} · 审计异常 ${result.auditErrors?.length || 0}` });
         result.failed.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：${item.error}` }));
-        new Notice(`核磁归档完成：成功 ${result.archived.length}，失败 ${result.failed.length}，未执行 ${result.skipped.length}`);
+        result.auditErrors?.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：数据已移动但成功审计写入失败：${item.error}` }));
+        new Notice(`核磁归档完成：成功 ${result.archived.length}，失败 ${result.failed.length}，未执行 ${result.skipped.length}，审计异常 ${result.auditErrors?.length || 0}`);
       }
     } catch (error) {
       this.saving = false;
@@ -1219,7 +1267,6 @@ const { PluginSettingTab, Setting, Notice } = require('obsidian');
 
 const DEFAULT_SETTINGS = {
   openOnStartup: false,
-  workbenchRootFolder: '00-博士工作台',
   nmrInboxFolder: '',
   nmrArchiveFolder: ''
 };
@@ -1230,7 +1277,6 @@ function mergeSettings(value) {
     ...DEFAULT_SETTINGS,
     ...source,
     openOnStartup: Boolean(source.openOnStartup ?? DEFAULT_SETTINGS.openOnStartup),
-    workbenchRootFolder: String(source.workbenchRootFolder ?? DEFAULT_SETTINGS.workbenchRootFolder).trim(),
     nmrInboxFolder: String(source.nmrInboxFolder ?? DEFAULT_SETTINGS.nmrInboxFolder).trim(),
     nmrArchiveFolder: String(source.nmrArchiveFolder ?? DEFAULT_SETTINGS.nmrArchiveFolder).trim()
   };
@@ -1258,15 +1304,8 @@ class ResearchWorkbenchSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }));
 
-    new Setting(containerEl)
-      .setName('工作台根目录')
-      .setDesc('用于说明和未来目录管理；当前数据库仍兼容既有 00-博士工作台 结构。')
-      .addText((text) => text
-        .setValue(this.plugin.settings.workbenchRootFolder)
-        .onChange(async (value) => {
-          this.plugin.settings.workbenchRootFolder = value.trim();
-          await this.plugin.saveSettings();
-        }));
+    const rootInfo = containerEl.createDiv({ cls: 'setting-item-description' });
+    rootInfo.setText('工作台根目录：00-博士工作台（当前版本固定，避免出现设置已修改但目录未迁移的误导）。');
 
     containerEl.createEl('h3', { text: '核磁文件夹' });
     containerEl.createEl('p', { text: '路径只在实际使用时检查。插件不会自动移动、删除或覆盖原始数据。' });
@@ -1796,6 +1835,13 @@ class WorkbenchView extends ItemView {
       card.createDiv({ cls: 'phdcc-empty', text: `数据库扫描失败：${this.researchDatabase.error}` });
       return;
     }
+    if (this.researchDatabase.duplicateIds?.length) {
+      const warning = card.createDiv({ cls: 'phdcc-db-warning' });
+      warning.createDiv({ text: `⚠ 发现 ${this.researchDatabase.duplicateIds.length} 个重复永久 ID` });
+      this.researchDatabase.duplicateIds.forEach((duplicate) => {
+        warning.createDiv({ cls: 'phdcc-file-meta', text: `${duplicate.id}：${duplicate.paths.join(' · ')}` });
+      });
+    }
     if (!visible.length) {
       card.createDiv({ cls: 'phdcc-empty', text: query ? '没有匹配的科研记录' : '数据库暂无记录' });
       return;
@@ -1970,7 +2016,7 @@ module.exports = { VIEW_TYPE, WorkbenchView };
 const { Plugin } = require('obsidian');
 const { VIEW_TYPE, WorkbenchView } = require('./lib/view');
 const { mergeSettings, ResearchWorkbenchSettingTab } = require('./lib/settings');
-const { isManagedPath, isDerivedPath } = require('./lib/database');
+const { affectsManagedPath } = require('./lib/database');
 
 module.exports = class PhDCommandCenterPlugin extends Plugin {
   async onload() {
@@ -1992,8 +2038,8 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
     this.addSettingTab(new ResearchWorkbenchSettingTab(this.app, this));
 
     const scheduleRefresh = (file, oldPath) => {
-      const filePath = file?.path || (typeof oldPath === 'string' ? oldPath : '');
-      if (filePath && (!isManagedPath(filePath) || isDerivedPath(filePath))) return;
+      const paths = [file?.path, typeof oldPath === 'string' ? oldPath : ''].filter(Boolean);
+      if (paths.length && !affectsManagedPath(paths)) return;
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = window.setTimeout(() => {
         for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {

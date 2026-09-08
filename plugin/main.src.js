@@ -1,7 +1,7 @@
 const { Plugin } = require('obsidian');
 const { VIEW_TYPE, WorkbenchView } = require('./lib/view');
 const { mergeSettings, ResearchWorkbenchSettingTab } = require('./lib/settings');
-const { isManagedPath, isDerivedPath } = require('./lib/database');
+const { affectsManagedPath } = require('./lib/database');
 
 module.exports = class PhDCommandCenterPlugin extends Plugin {
   async onload() {
@@ -23,8 +23,8 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
     this.addSettingTab(new ResearchWorkbenchSettingTab(this.app, this));
 
     const scheduleRefresh = (file, oldPath) => {
-      const filePath = file?.path || (typeof oldPath === 'string' ? oldPath : '');
-      if (filePath && (!isManagedPath(filePath) || isDerivedPath(filePath))) return;
+      const paths = [file?.path, typeof oldPath === 'string' ? oldPath : ''].filter(Boolean);
+      if (paths.length && !affectsManagedPath(paths)) return;
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = window.setTimeout(() => {
         for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {

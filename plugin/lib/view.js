@@ -501,6 +501,13 @@ class WorkbenchView extends ItemView {
       card.createDiv({ cls: 'phdcc-empty', text: `数据库扫描失败：${this.researchDatabase.error}` });
       return;
     }
+    if (this.researchDatabase.duplicateIds?.length) {
+      const warning = card.createDiv({ cls: 'phdcc-db-warning' });
+      warning.createDiv({ text: `⚠ 发现 ${this.researchDatabase.duplicateIds.length} 个重复永久 ID` });
+      this.researchDatabase.duplicateIds.forEach((duplicate) => {
+        warning.createDiv({ cls: 'phdcc-file-meta', text: `${duplicate.id}：${duplicate.paths.join(' · ')}` });
+      });
+    }
     if (!visible.length) {
       card.createDiv({ cls: 'phdcc-empty', text: query ? '没有匹配的科研记录' : '数据库暂无记录' });
       return;

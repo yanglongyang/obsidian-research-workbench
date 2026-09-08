@@ -2,7 +2,6 @@ const { PluginSettingTab, Setting, Notice } = require('obsidian');
 
 const DEFAULT_SETTINGS = {
   openOnStartup: false,
-  workbenchRootFolder: '00-博士工作台',
   nmrInboxFolder: '',
   nmrArchiveFolder: ''
 };
@@ -13,7 +12,6 @@ function mergeSettings(value) {
     ...DEFAULT_SETTINGS,
     ...source,
     openOnStartup: Boolean(source.openOnStartup ?? DEFAULT_SETTINGS.openOnStartup),
-    workbenchRootFolder: String(source.workbenchRootFolder ?? DEFAULT_SETTINGS.workbenchRootFolder).trim(),
     nmrInboxFolder: String(source.nmrInboxFolder ?? DEFAULT_SETTINGS.nmrInboxFolder).trim(),
     nmrArchiveFolder: String(source.nmrArchiveFolder ?? DEFAULT_SETTINGS.nmrArchiveFolder).trim()
   };
@@ -41,15 +39,8 @@ class ResearchWorkbenchSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }));
 
-    new Setting(containerEl)
-      .setName('工作台根目录')
-      .setDesc('用于说明和未来目录管理；当前数据库仍兼容既有 00-博士工作台 结构。')
-      .addText((text) => text
-        .setValue(this.plugin.settings.workbenchRootFolder)
-        .onChange(async (value) => {
-          this.plugin.settings.workbenchRootFolder = value.trim();
-          await this.plugin.saveSettings();
-        }));
+    const rootInfo = containerEl.createDiv({ cls: 'setting-item-description' });
+    rootInfo.setText('工作台根目录：00-博士工作台（当前版本固定，避免出现设置已修改但目录未迁移的误导）。');
 
     containerEl.createEl('h3', { text: '核磁文件夹' });
     containerEl.createEl('p', { text: '路径只在实际使用时检查。插件不会自动移动、删除或覆盖原始数据。' });

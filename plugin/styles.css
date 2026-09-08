@@ -622,6 +622,15 @@
   border-color: var(--phdcc-border-strong);
 }
 
+.phdcc-view .phdcc-db-warning {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  color: var(--phdcc-danger);
+  background: color-mix(in srgb, var(--phdcc-danger) 8%, var(--phdcc-surface));
+  border: 1px solid color-mix(in srgb, var(--phdcc-danger) 30%, var(--phdcc-border));
+  border-radius: 8px;
+}
+
 .phdcc-view .phdcc-nmr-open {
   margin-top: 8px;
   padding: 4px 9px;

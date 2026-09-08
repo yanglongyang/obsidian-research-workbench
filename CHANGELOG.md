@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0.1 — Final Closure
+
+### Added
+
+- 重复永久 ID 检测和数据库页面警告。
+- 真实 NMR preflight/archive 回归测试。
+
+### Fixed
+
+- 修复科研文件从受管目录移出时不触发数据库刷新的 rename 边界。
+- NMR 归档改为 started → move → success/failed 两阶段审计。
+- 归档预检拒绝跨磁盘分区移动。
+- 移除无实际迁移能力的可编辑工作台根目录设置。
+
 ## 0.2.0 — Data Foundation
 
 ### Added

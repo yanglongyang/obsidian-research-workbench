@@ -24,6 +24,24 @@ function isDerivedPath(filePath) {
   return path === DB_FILE || path === AUDIT_FILE || pathInside(path, DB_FOLDER) || pathInside(path, AUDIT_FOLDER);
 }
 
+function affectsManagedPath(paths) {
+  return (Array.isArray(paths) ? paths : [paths])
+    .filter(Boolean)
+    .some((filePath) => isManagedPath(filePath) && !isDerivedPath(filePath));
+}
+
+function findDuplicateIds(records) {
+  const byId = new Map();
+  (Array.isArray(records) ? records : []).forEach((record) => {
+    if (!record?.id) return;
+    if (!byId.has(record.id)) byId.set(record.id, []);
+    byId.get(record.id).push(record);
+  });
+  return [...byId.entries()]
+    .filter(([, matches]) => matches.length > 1)
+    .map(([id, matches]) => ({ id, paths: matches.map((record) => record.path) }));
+}
+
 function simpleHash(value) {
   let hash = 2166136261;
   for (const char of String(value || '')) {
@@ -70,6 +88,7 @@ class ResearchDatabase {
     this.plugin = plugin;
     this.app = plugin.app;
     this.records = [];
+    this.duplicateIds = [];
     this.lastSync = '';
     this.error = '';
   }
@@ -143,6 +162,7 @@ class ResearchDatabase {
           await this.app.vault.modify(existing, payload);
         }
       }
+      this.duplicateIds = findDuplicateIds(records);
       this.records = records;
       this.lastSync = new Date().toISOString();
       return records;
@@ -169,6 +189,8 @@ module.exports = {
   pathInside,
   isManagedPath,
   isDerivedPath,
+  affectsManagedPath,
+  findDuplicateIds,
   simpleHash,
   recordType,
   identityFor,
