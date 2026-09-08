@@ -1,0 +1,9 @@
+{
+  "id": "phd-command-center",
+  "name": "科研工作台",
+  "version": "0.1.0",
+  "minAppVersion": "1.6.0",
+  "description": "本地优先的科研任务、实验、数据、文献与写作工作台。",
+  "author": "Local workspace",
+  "isDesktopOnly": false
+}
