@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0.1 — Final Closure
+## 0.2.1 — Data Foundation Final Closure
 
 ### Added
 
