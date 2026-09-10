@@ -826,7 +826,135 @@ async function createDataAsset(app, input, generateRecordId) {
   const file = await app.vault.create(buildDataAssetPath(app.vault, title), renderDataAssetContent(asset));
   return { file, asset };
 }
-module.exports = { DATA_ASSET_FOLDER, ASSET_TYPES, buildDataAssetPath, renderDataAssetContent, createDataAsset };
+module.exports = { DATA_ASSET_FOLDER, ASSET_TYPES, ensureFolder, buildDataAssetPath, renderDataAssetContent, createDataAsset };
+
+},
+"./lib/entities/nmr-ledger": function (module, exports, require) {
+const { DATA_ASSET_FOLDER, ensureFolder } = require('./lib/entities/data-asset');
+
+const NMR_LEDGER_PATH = `${DATA_ASSET_FOLDER}/NMR 归档台账.md`;
+const NMR_LEDGER_ID = 'DATA-NMR-LEDGER';
+const START_MARKER = '<!-- NMR_LEDGER_ENTRIES_START -->';
+const END_MARKER = '<!-- NMR_LEDGER_ENTRIES_END -->';
+
+function yamlString(value) { return JSON.stringify(String(value ?? '')); }
+function cell(value) { return String(value ?? '').replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|').trim() || '—'; }
+function isNmrLedgerPath(value) { return String(value || '').replace(/\\/g, '/') === NMR_LEDGER_PATH; }
+
+function renderLedger(entries, archiveRoot = '', timestamps = {}) {
+  const created = timestamps.created || new Date().toISOString();
+  const updated = timestamps.updated || new Date().toISOString();
+  const rows = entries.map((entry) => `| ${cell(entry.entryId)} | ${cell(entry.nucleus)} | ${cell(entry.dataPath)} | ${cell(entry.project || entry.projectId)} | ${cell(entry.experiment || entry.experimentId)} | ${cell(entry.compound || entry.compoundId)} | ${cell(entry.archivedAt)} |`).join('\n');
+  return [
+    '---',
+    `record_id: ${yamlString(NMR_LEDGER_ID)}`,
+    'kind: data-asset',
+    `title: ${yamlString('NMR 归档台账')}`,
+    `asset_type: ${yamlString('nmr')}`,
+    `data_path: ${yamlString(archiveRoot)}`,
+    `status: ${yamlString('available')}`,
+    `created: ${yamlString(created)}`,
+    `updated: ${yamlString(updated)}`,
+    'tags:',
+    '  - research/data',
+    '  - research/nmr',
+    '---',
+    '# NMR 归档台账',
+    '',
+    '每行对应一套已归档的核磁原始数据。可直接编辑此表；原始目录的实际位置以“数据路径”为准。',
+    '',
+    '## 归档记录',
+    '',
+    START_MARKER,
+    '| 条目 ID | 核种 | 数据路径 | 课题 | 实验 | 化合物 | 归档时间 |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    rows,
+    END_MARKER,
+    ''
+  ].join('\n');
+}
+
+function parseLedgerEntries(content) {
+  const start = String(content || '').indexOf(START_MARKER);
+  const end = String(content || '').indexOf(END_MARKER);
+  if (start < 0 || end < 0 || end <= start) return [];
+  return String(content).slice(start + START_MARKER.length, end).split('\n').slice(3).map((line) => {
+    const cells = line.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map((value) => value.trim().replace(/\\\|/g, '|'));
+    if (cells.length < 7 || !cells[0] || cells[0] === '—') return null;
+    return { entryId: cells[0], nucleus: cells[1], dataPath: cells[2], project: cells[3], experiment: cells[4], compound: cells[5], archivedAt: cells[6] };
+  }).filter(Boolean);
+}
+
+async function upsertNmrLedger(app, input) {
+  if (!app?.vault) throw new Error('Obsidian Vault 不可用，无法登记 NMR 台账');
+  const entryId = String(input?.entryId || '').trim();
+  const dataPath = String(input?.dataPath || '').trim();
+  if (!entryId || !dataPath) throw new Error('NMR 台账条目缺少 ID 或数据路径');
+  await ensureFolder(app.vault, DATA_ASSET_FOLDER);
+  const existing = app.vault.getAbstractFileByPath(NMR_LEDGER_PATH);
+  const now = new Date().toISOString();
+  let entries = [];
+  let created = now;
+  if (existing) {
+    const content = await app.vault.read(existing);
+    entries = parseLedgerEntries(content);
+    const createdMatch = content.match(/^created:\s*["']?([^\n"']+)/m);
+    created = createdMatch?.[1]?.trim() || now;
+  }
+  const entry = {
+    entryId,
+    nucleus: String(input.nucleus || ''),
+    dataPath,
+    projectId: String(input.projectId || ''), project: String(input.project || ''),
+    experimentId: String(input.experimentId || ''), experiment: String(input.experiment || ''),
+    compoundId: String(input.compoundId || ''), compound: String(input.compound || ''),
+    archivedAt: String(input.archivedAt || now)
+  };
+  const index = entries.findIndex((item) => item.entryId === entryId);
+  if (index >= 0) entries[index] = entry;
+  else entries.push(entry);
+  const content = renderLedger(entries, String(input.archiveRoot || ''), { created, updated: now });
+  let file = existing;
+  if (!file) file = await app.vault.create(NMR_LEDGER_PATH, content);
+  else await app.vault.modify(file, content);
+  return { file, ledgerId: NMR_LEDGER_ID, entryId, created: !existing, entryCount: entries.length };
+}
+
+function legacyNmrAssets(app) {
+  if (!app?.vault || !app?.metadataCache) return [];
+  return app.vault.getMarkdownFiles().filter((file) => file.path.startsWith(`${DATA_ASSET_FOLDER}/`) && !isNmrLedgerPath(file.path)).map((file) => ({ file, frontmatter: app.metadataCache.getFileCache(file)?.frontmatter || {} })).filter(({ frontmatter }) => frontmatter.kind === 'data-asset' && frontmatter.asset_type === 'nmr');
+}
+
+async function consolidateLegacyNmrAssets(app) {
+  const items = legacyNmrAssets(app);
+  const migrated = [];
+  const skipped = [];
+  const failed = [];
+  for (const { file, frontmatter } of items) {
+    const dataPath = String(frontmatter.data_path || '').trim();
+    const entryId = String(frontmatter.record_id || '').trim();
+    if (!dataPath || !entryId) { skipped.push({ file, reason: '缺少 record_id 或 data_path' }); continue; }
+    try {
+      await upsertNmrLedger(app, {
+        entryId: `LEGACY-${entryId}`,
+        nucleus: /13C/i.test(String(frontmatter.title || '')) ? '13C' : /1H/i.test(String(frontmatter.title || '')) ? '1H' : 'NMR',
+        dataPath,
+        projectId: frontmatter.project_id, project: frontmatter.project,
+        experimentId: frontmatter.experiment_id, experiment: frontmatter.experiment,
+        compoundId: frontmatter.compound_id, compound: frontmatter.compound,
+        archivedAt: frontmatter.updated || frontmatter.created || frontmatter.acquired_at,
+        archiveRoot: ''
+      });
+      await app.vault.trash(file, false);
+      migrated.push(file);
+    } catch (error) {
+      failed.push({ file, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { migrated, skipped, failed };
+}
+
+module.exports = { NMR_LEDGER_PATH, NMR_LEDGER_ID, isNmrLedgerPath, parseLedgerEntries, renderLedger, upsertNmrLedger, legacyNmrAssets, consolidateLegacyNmrAssets };
 
 },
 "./lib/entities/identity": function (module, exports, require) {
@@ -970,7 +1098,7 @@ const NMR_INBOX_FOLDER = '';
 const NMR_ARCHIVE_FOLDER = '';
 const NUCLEUS_ARCHIVE_MAP = { '1H': '氢谱', '13C': '碳谱' };
 const { AUDIT_FOLDER, AUDIT_FILE } = require('./lib/database');
-const { createDataAsset } = require('./lib/entities/data-asset');
+const { upsertNmrLedger } = require('./lib/entities/nmr-ledger');
 const { generateRecordId } = require('./lib/data');
 
 const { spawn } = require('child_process');
@@ -1103,7 +1231,7 @@ class NmrInboxStore {
   constructor(plugin, options = {}) {
     this.plugin = plugin;
     this.app = plugin?.app;
-    this.createDataAsset = options.createDataAsset || createDataAsset;
+    this.registerNmrArchive = options.registerNmrArchive || upsertNmrLedger;
   }
 
   get inboxFolder() {
@@ -1407,27 +1535,30 @@ class NmrInboxStore {
         await fs.rename(plan.sourcePath, plan.destinationPath);
         archived.push(plan);
         let dataAssetId = '';
+        let ledgerEntryId = '';
         try {
-          const result = await this.createDataAsset(this.app, {
-            title: `${plan.destinationRelativePath} · ${plan.nucleus} NMR`,
-            assetType: 'nmr',
+          const result = await this.registerNmrArchive(this.app, {
+            entryId: operationId,
+            nucleus: plan.nucleus,
             dataPath: plan.destinationPath,
+            archiveRoot,
             projectId: relations.projectId || '',
             project: relations.project || '',
             experimentId: relations.experimentId || '',
             experiment: relations.experiment || '',
             compoundId: relations.compoundId || '',
             compound: relations.compound || '',
-            acquiredAt: plan.modified
-          }, generateRecordId);
-          dataAssetId = result.asset.recordId;
+            archivedAt: new Date().toISOString()
+          });
+          dataAssetId = result.ledgerId;
+          ledgerEntryId = result.entryId;
         } catch (registrationError) {
           const message = registrationError instanceof Error ? registrationError.message : String(registrationError);
           registrationErrors.push({ plan, error: message });
-          console.error('[Research Workbench] NMR DataAsset registration failed', registrationError);
+          console.error('[Research Workbench] NMR ledger registration failed', registrationError);
         }
         try {
-          await this.writeAudit({ ...auditBase, data_asset_id: dataAssetId, timestamp: new Date().toISOString(), status: 'success', ...(dataAssetId ? {} : { registration_error: registrationErrors[registrationErrors.length - 1]?.error || '数据资产登记失败' }) });
+          await this.writeAudit({ ...auditBase, data_asset_id: dataAssetId, nmr_ledger_entry_id: ledgerEntryId, timestamp: new Date().toISOString(), status: 'success', ...(dataAssetId ? {} : { registration_error: registrationErrors[registrationErrors.length - 1]?.error || 'NMR 台账登记失败' }) });
         } catch (auditError) {
           const message = auditError instanceof Error ? auditError.message : String(auditError);
           auditErrors.push({ plan, error: message });
@@ -2364,6 +2495,82 @@ class MigrationModal extends Modal {
 module.exports = { MigrationModal };
 
 },
+"./lib/modals/nmr-ledger-migration-modal": function (module, exports, require) {
+const { Modal, Notice } = require('obsidian');
+const { legacyNmrAssets, consolidateLegacyNmrAssets } = require('./lib/entities/nmr-ledger');
+
+class NmrLedgerMigrationModal extends Modal {
+  constructor(app, options = {}) {
+    super(app);
+    this.options = options;
+    this.items = [];
+    this.confirmed = false;
+    this.busy = false;
+  }
+
+  onOpen() {
+    this.modalEl.addClass('phdcc-task-modal');
+    this.contentEl.createEl('h2', { text: '合并旧核磁数据资产' });
+    this.contentEl.createDiv({ cls: 'phdcc-empty', text: '旧的“每套一份”NMR 数据资产会被写入 NMR 归档台账；确认成功后，原单条笔记将移入 Obsidian 回收站，可恢复。原始核磁数据文件不会移动或删除。' });
+    this.body = this.contentEl.createDiv();
+    this.items = legacyNmrAssets(this.app);
+    this.renderPreview();
+    const confirmation = this.contentEl.createDiv({ cls: 'phdcc-archive-checks' });
+    this.checkbox = confirmation.createEl('input', { attr: { type: 'checkbox', 'aria-label': '确认合并旧核磁数据资产' } });
+    confirmation.createSpan({ text: '我确认将这些旧单条笔记合并，并移入 Obsidian 回收站。' });
+    this.checkbox.addEventListener('change', () => { this.confirmed = this.checkbox.checked; this.updateButton(); });
+    const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
+    const cancel = footer.createEl('button', { text: '取消', type: 'button' });
+    cancel.addEventListener('click', () => this.close());
+    this.button = footer.createEl('button', { text: '无需合并', cls: 'mod-cta', type: 'button' });
+    this.button.addEventListener('click', () => { void this.submit(); });
+    this.updateButton();
+  }
+
+  renderPreview() {
+    this.body.empty();
+    if (!this.items.length) return void this.body.createDiv({ cls: 'phdcc-empty', text: '没有发现旧的单条 NMR 数据资产。' });
+    this.body.createDiv({ cls: 'phdcc-file-meta', text: `将合并 ${this.items.length} 条：` });
+    this.items.forEach(({ file, frontmatter }) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${frontmatter.title || file.basename} · ${file.path}` }));
+  }
+
+  updateButton() {
+    if (!this.button) return;
+    this.button.disabled = this.busy || !this.items.length || !this.confirmed;
+    this.button.setText(this.busy ? '合并中…' : !this.items.length ? '无需合并' : !this.confirmed ? '请先确认' : `合并 ${this.items.length} 条记录`);
+  }
+
+  async submit() {
+    if (this.busy || !this.confirmed || !this.items.length) return;
+    this.busy = true;
+    this.checkbox.disabled = true;
+    this.updateButton();
+    try {
+      const result = await consolidateLegacyNmrAssets(this.app);
+      if (typeof this.options.onCompleted === 'function') await this.options.onCompleted(result);
+      const summary = `核磁台账合并完成：${result.migrated.length} 条已合并，${result.skipped.length} 条跳过，${result.failed.length} 条失败。`;
+      new Notice(summary);
+      this.body.empty();
+      this.body.createDiv({ cls: 'phdcc-empty', text: summary });
+      result.skipped.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `跳过：${item.file.path} · ${item.reason}` }));
+      result.failed.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `失败：${item.file.path} · ${item.error}` }));
+      this.button.disabled = false;
+      this.button.setText('关闭');
+      this.button.onclick = () => this.close();
+    } catch (error) {
+      this.busy = false;
+      this.checkbox.disabled = false;
+      this.updateButton();
+      new Notice(error instanceof Error ? error.message : '合并失败');
+    }
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+module.exports = { NmrLedgerMigrationModal };
+
+},
 "./lib/view": function (module, exports, require) {
 const { ItemView, Notice, setIcon } = require('obsidian');
 const {
@@ -2390,6 +2597,7 @@ const { ProjectModal } = require('./lib/modals/project-modal');
 const { CompoundModal } = require('./lib/modals/compound-modal');
 const { DataAssetModal } = require('./lib/modals/data-asset-modal');
 const { MigrationModal } = require('./lib/modals/migration-modal');
+const { NmrLedgerMigrationModal } = require('./lib/modals/nmr-ledger-migration-modal');
 const pageRenderers = require('./lib/ui/page-renderers');
 
 const VIEW_TYPE = 'phd-command-center-view';
@@ -2662,6 +2870,7 @@ class WorkbenchView extends ItemView {
   openCompoundModal() { new CompoundModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openDataAssetModal() { new DataAssetModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openMigrationModal() { new MigrationModal(this.app, this.plugin, { onCompleted: async () => { await this.refresh(); } }).open(); }
+  openNmrLedgerMigrationModal() { new NmrLedgerMigrationModal(this.app, { onCompleted: async () => { await this.refresh(); } }).open(); }
 
   filteredTasks(tasks) {
     const query = this.searchQuery.trim().toLowerCase();
@@ -3080,6 +3289,8 @@ class WorkbenchView extends ItemView {
 
   _renderDataPage() {
     this.renderPageHeader('数据资产', '原始数据位置与派生索引', { label: '+ 新增数据资产', onClick: () => this.openDataAssetModal() });
+    const consolidate = this.pageEl.createEl('button', { cls: 'phdcc-page-add phdcc-calendar-add', text: '合并旧核磁记录', attr: { type: 'button', title: '将旧单条 NMR 数据资产合并为一个台账' } });
+    consolidate.addEventListener('click', () => this.openNmrLedgerMigrationModal());
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
     const assets = this.entityStore.listDataAssets().filter((item) => !this.searchQuery || `${item.title} ${item.assetType} ${item.dataPath} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
     if (assets.length) assets.forEach((item) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: item.title }); title.addEventListener('click', () => { void this.openFile(item.file); }); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.assetType || 'other'} · ${item.project || '未关联课题'} · ${item.id}` }); row.createDiv({ cls: 'phdcc-file-next', text: item.dataPath || '未记录数据路径' }); });

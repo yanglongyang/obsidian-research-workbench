@@ -67,4 +67,4 @@ async function createDataAsset(app, input, generateRecordId) {
   const file = await app.vault.create(buildDataAssetPath(app.vault, title), renderDataAssetContent(asset));
   return { file, asset };
 }
-module.exports = { DATA_ASSET_FOLDER, ASSET_TYPES, buildDataAssetPath, renderDataAssetContent, createDataAsset };
+module.exports = { DATA_ASSET_FOLDER, ASSET_TYPES, ensureFolder, buildDataAssetPath, renderDataAssetContent, createDataAsset };

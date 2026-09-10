@@ -8,6 +8,7 @@ const entries = [
   ['./lib/entities/project', path.join(pluginDir, 'lib', 'entities', 'project.js')],
   ['./lib/entities/compound', path.join(pluginDir, 'lib', 'entities', 'compound.js')],
   ['./lib/entities/data-asset', path.join(pluginDir, 'lib', 'entities', 'data-asset.js')],
+  ['./lib/entities/nmr-ledger', path.join(pluginDir, 'lib', 'entities', 'nmr-ledger.js')],
   ['./lib/entities/identity', path.join(pluginDir, 'lib', 'entities', 'identity.js')],
   ['./lib/ui/page-renderers', path.join(pluginDir, 'lib', 'ui', 'page-renderers.js')],
   ['./lib/entities/store', path.join(pluginDir, 'lib', 'entities', 'store.js')],
@@ -24,6 +25,7 @@ const entries = [
   ['./lib/modals/compound-modal', path.join(pluginDir, 'lib', 'modals', 'compound-modal.js')],
   ['./lib/modals/data-asset-modal', path.join(pluginDir, 'lib', 'modals', 'data-asset-modal.js')],
   ['./lib/modals/migration-modal', path.join(pluginDir, 'lib', 'modals', 'migration-modal.js')],
+  ['./lib/modals/nmr-ledger-migration-modal', path.join(pluginDir, 'lib', 'modals', 'nmr-ledger-migration-modal.js')],
   ['./lib/view', path.join(pluginDir, 'lib', 'view.js')],
   ['./main', path.join(pluginDir, 'main.src.js')]
 ];
@@ -45,6 +47,7 @@ function normalizeLocalRequires(id, source) {
       .replace("require('./modals/compound-modal')", "require('./lib/modals/compound-modal')")
       .replace("require('./modals/data-asset-modal')", "require('./lib/modals/data-asset-modal')")
       .replace("require('./modals/migration-modal')", "require('./lib/modals/migration-modal')")
+      .replace("require('./modals/nmr-ledger-migration-modal')", "require('./lib/modals/nmr-ledger-migration-modal')")
       .replace("require('./ui/page-renderers')", "require('./lib/ui/page-renderers')");
   }
   if (id === './lib/ui/page-renderers') return source;
@@ -63,7 +66,9 @@ function normalizeLocalRequires(id, source) {
   if (id === './lib/modals/compound-modal') return source.replace("require('../entities/compound')", "require('./lib/entities/compound')").replace("require('../data')", "require('./lib/data')");
   if (id === './lib/modals/data-asset-modal') return source.replace("require('../entities/data-asset')", "require('./lib/entities/data-asset')").replace("require('../data')", "require('./lib/data')");
   if (id === './lib/modals/migration-modal') return source.replace("require('../migrations/permanent-id')", "require('./lib/migrations/permanent-id')").replace("require('../data')", "require('./lib/data')");
-  if (id === './lib/nmr') return source.replace("require('./database')", "require('./lib/database')").replace("require('./entities/data-asset')", "require('./lib/entities/data-asset')").replace("require('./data')", "require('./lib/data')");
+  if (id === './lib/modals/nmr-ledger-migration-modal') return source.replace("require('../entities/nmr-ledger')", "require('./lib/entities/nmr-ledger')");
+  if (id === './lib/nmr') return source.replace("require('./database')", "require('./lib/database')").replace("require('./entities/nmr-ledger')", "require('./lib/entities/nmr-ledger')").replace("require('./data')", "require('./lib/data')");
+  if (id === './lib/entities/nmr-ledger') return source.replace("require('./data-asset')", "require('./lib/entities/data-asset')");
   if (id === './lib/settings') return source;
   if (id === './lib/quick-create-modal') return source;
   if (id === './lib/quick-create-command') return source;

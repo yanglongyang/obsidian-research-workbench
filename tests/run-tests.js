@@ -27,6 +27,7 @@ const { isPermanentEntityId } = require('../plugin/lib/entities/identity');
 const { createProject } = require('../plugin/lib/entities/project');
 const { createCompound } = require('../plugin/lib/entities/compound');
 const { createDataAsset } = require('../plugin/lib/entities/data-asset');
+const { NMR_LEDGER_PATH, NMR_LEDGER_ID, parseLedgerEntries, upsertNmrLedger, consolidateLegacyNmrAssets } = require('../plugin/lib/entities/nmr-ledger');
 const { PermanentIdMigration } = require('../plugin/lib/migrations/permanent-id');
 const { filterCompoundsByProject, suggestProjectFromCompound } = require('../plugin/lib/experiment-modal');
 const { EntityStore } = require('../plugin/lib/entities/store');
@@ -45,8 +46,10 @@ function auditVault(options = {}) {
   return {
     files,
     getAbstractFileByPath(value) { return files.has(value) ? files.get(value) : null; },
+    async read(file) { return file.content || ''; },
     async createFolder(value) { if (options.fail) throw new Error('audit vault unavailable'); files.set(value, { path: value }); },
     async create(value, content) { if (options.fail) throw new Error('audit vault unavailable'); const file = { path: value, content }; files.set(value, file); return file; },
+    async modify(file, content) { if (options.fail) throw new Error('audit vault unavailable'); file.content = content; },
     async append(file, content) { if (options.fail) throw new Error('audit vault unavailable'); file.content += content; }
   };
 }
@@ -349,25 +352,25 @@ test('NMR delete refuses unlisted paths and blocks deletion when initial audit f
   await fs.rm(root, { recursive: true, force: true });
 });
 
-test('NMR archive creates DataAsset with relations and records DATA id', async () => {
+test('NMR archive appends one ledger entry with relations and records the ledger ID', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-asset-'));
   const inbox = path.join(root, 'inbox'); const archive = path.join(root, 'archive');
   await fs.mkdir(inbox, { recursive: true }); await makeScan(inbox, 'linked', '1H', true);
   const vault = auditVault(); const store = new nmr.NmrInboxStore(pluginFor(inbox, archive, vault));
   let received;
-  store.createDataAsset = async (_app, input) => { received = input; return { asset: { recordId: 'DATA-TEST' } }; };
+  store.registerNmrArchive = async (_app, input) => { received = input; return { ledgerId: NMR_LEDGER_ID, entryId: input.entryId }; };
   const result = await store.archiveSelected(['linked'], { projectId: 'PROJ-A', experimentId: 'EXP-A', compoundId: 'CMP-A' });
-  assert.strictEqual(result.status, 'completed'); assert.strictEqual(received.assetType, 'nmr'); assert.strictEqual(received.projectId, 'PROJ-A');
-  assert.match(vault.files.get('00-博士工作台/应用数据/审计/nmr-archive.jsonl').content, /"data_asset_id":"DATA-TEST"/);
+  assert.strictEqual(result.status, 'completed'); assert.strictEqual(received.nucleus, '1H'); assert.strictEqual(received.projectId, 'PROJ-A');
+  assert.match(vault.files.get('00-博士工作台/应用数据/审计/nmr-archive.jsonl').content, new RegExp(`"data_asset_id":"${NMR_LEDGER_ID}"`));
   await fs.rm(root, { recursive: true, force: true });
 });
 
-test('NMR registration failure keeps moved raw data and returns partial failure', async () => {
+test('NMR ledger registration failure keeps moved raw data and returns partial failure', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-asset-fail-'));
   const inbox = path.join(root, 'inbox'); const archive = path.join(root, 'archive');
   await fs.mkdir(inbox, { recursive: true }); await makeScan(inbox, 'registered-fail', '1H', true);
   const vault = auditVault(); const store = new nmr.NmrInboxStore(pluginFor(inbox, archive, vault));
-  store.createDataAsset = async () => { throw new Error('registration unavailable'); };
+  store.registerNmrArchive = async () => { throw new Error('registration unavailable'); };
   const result = await store.archiveSelected(['registered-fail']);
   assert.strictEqual(result.status, 'partial_failure'); assert.strictEqual(result.registrationErrors.length, 1);
   assert.strictEqual(await fs.access(path.join(archive, '氢谱', 'registered-fail')).then(() => true), true);
@@ -375,17 +378,45 @@ test('NMR registration failure keeps moved raw data and returns partial failure'
   await fs.rm(root, { recursive: true, force: true });
 });
 
-test('NMR final audit failure does not roll back move or DataAsset', async () => {
+test('NMR final audit failure does not roll back move or ledger entry', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-final-audit-'));
   const inbox = path.join(root, 'inbox'); const archive = path.join(root, 'archive');
   await fs.mkdir(inbox, { recursive: true }); await makeScan(inbox, 'audit-final', '1H', true);
   const vault = auditVault(); const store = new nmr.NmrInboxStore(pluginFor(inbox, archive, vault));
   let auditCount = 0; store.writeAudit = async (entry) => { auditCount += 1; if (entry.status === 'success') throw new Error('final audit unavailable'); };
-  let created = false; store.createDataAsset = async () => { created = true; return { asset: { recordId: 'DATA-FINAL' } }; };
+  let created = false; store.registerNmrArchive = async (_app, input) => { created = true; return { ledgerId: NMR_LEDGER_ID, entryId: input.entryId }; };
   const result = await store.archiveSelected(['audit-final']);
   assert.strictEqual(result.status, 'partial_failure'); assert.strictEqual(result.auditErrors.length, 1); assert.strictEqual(created, true); assert.ok(auditCount >= 2);
   assert.strictEqual(await fs.access(path.join(archive, '氢谱', 'audit-final')).then(() => true), true);
   await fs.rm(root, { recursive: true, force: true });
+});
+
+test('NMR ledger stores multiple archives in one Markdown file', async () => {
+  const vault = auditVault();
+  const app = { vault };
+  await upsertNmrLedger(app, { entryId: 'NMRARC-1', nucleus: '1H', dataPath: 'E:\\NMR\\氢谱\\YLY-1\\10', project: '课题 A', archivedAt: '2026-09-10T00:00:00.000Z', archiveRoot: 'E:\\NMR' });
+  await upsertNmrLedger(app, { entryId: 'NMRARC-2', nucleus: '13C', dataPath: 'E:\\NMR\\碳谱\\YLY-1\\11', compound: 'YLY-1', archivedAt: '2026-09-10T01:00:00.000Z', archiveRoot: 'E:\\NMR' });
+  const ledger = vault.files.get(NMR_LEDGER_PATH).content;
+  assert.match(ledger, /record_id: "DATA-NMR-LEDGER"/);
+  assert.strictEqual(parseLedgerEntries(ledger).length, 2);
+  assert.strictEqual(vault.files.size, 3);
+});
+
+test('legacy single-file NMR assets consolidate into the ledger and move to vault trash', async () => {
+  const vault = auditVault();
+  const first = { path: '00-博士工作台/04-数据资产/old-1.md', basename: 'old-1', extension: 'md', content: '' };
+  const second = { path: '00-博士工作台/04-数据资产/old-2.md', basename: 'old-2', extension: 'md', content: '' };
+  vault.files.set(first.path, first); vault.files.set(second.path, second);
+  vault.getMarkdownFiles = () => [...vault.files.values()].filter((file) => file.extension === 'md');
+  vault.trash = async (file) => { vault.files.delete(file.path); };
+  const metadata = new Map([
+    [first, { kind: 'data-asset', asset_type: 'nmr', record_id: 'DATA-OLD-1', data_path: 'E:\\NMR\\氢谱\\1', title: '1H NMR' }],
+    [second, { kind: 'data-asset', asset_type: 'nmr', record_id: 'DATA-OLD-2', data_path: 'E:\\NMR\\碳谱\\2', title: '13C NMR' }]
+  ]);
+  const result = await consolidateLegacyNmrAssets({ vault, metadataCache: { getFileCache: (file) => ({ frontmatter: metadata.get(file) || {} }) } });
+  assert.strictEqual(result.migrated.length, 2);
+  assert.strictEqual(vault.files.has(first.path), false);
+  assert.strictEqual(parseLedgerEntries(vault.files.get(NMR_LEDGER_PATH).content).length, 2);
 });
 
 test('NMR audit failure prevents moving source data', async () => {

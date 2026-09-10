@@ -23,6 +23,7 @@ const { ProjectModal } = require('./modals/project-modal');
 const { CompoundModal } = require('./modals/compound-modal');
 const { DataAssetModal } = require('./modals/data-asset-modal');
 const { MigrationModal } = require('./modals/migration-modal');
+const { NmrLedgerMigrationModal } = require('./modals/nmr-ledger-migration-modal');
 const pageRenderers = require('./ui/page-renderers');
 
 const VIEW_TYPE = 'phd-command-center-view';
@@ -295,6 +296,7 @@ class WorkbenchView extends ItemView {
   openCompoundModal() { new CompoundModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openDataAssetModal() { new DataAssetModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openMigrationModal() { new MigrationModal(this.app, this.plugin, { onCompleted: async () => { await this.refresh(); } }).open(); }
+  openNmrLedgerMigrationModal() { new NmrLedgerMigrationModal(this.app, { onCompleted: async () => { await this.refresh(); } }).open(); }
 
   filteredTasks(tasks) {
     const query = this.searchQuery.trim().toLowerCase();
@@ -713,6 +715,8 @@ class WorkbenchView extends ItemView {
 
   _renderDataPage() {
     this.renderPageHeader('数据资产', '原始数据位置与派生索引', { label: '+ 新增数据资产', onClick: () => this.openDataAssetModal() });
+    const consolidate = this.pageEl.createEl('button', { cls: 'phdcc-page-add phdcc-calendar-add', text: '合并旧核磁记录', attr: { type: 'button', title: '将旧单条 NMR 数据资产合并为一个台账' } });
+    consolidate.addEventListener('click', () => this.openNmrLedgerMigrationModal());
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
     const assets = this.entityStore.listDataAssets().filter((item) => !this.searchQuery || `${item.title} ${item.assetType} ${item.dataPath} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
     if (assets.length) assets.forEach((item) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: item.title }); title.addEventListener('click', () => { void this.openFile(item.file); }); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.assetType || 'other'} · ${item.project || '未关联课题'} · ${item.id}` }); row.createDiv({ cls: 'phdcc-file-next', text: item.dataPath || '未记录数据路径' }); });

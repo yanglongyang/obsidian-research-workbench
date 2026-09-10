@@ -5,7 +5,7 @@ const NMR_INBOX_FOLDER = '';
 const NMR_ARCHIVE_FOLDER = '';
 const NUCLEUS_ARCHIVE_MAP = { '1H': '氢谱', '13C': '碳谱' };
 const { AUDIT_FOLDER, AUDIT_FILE } = require('./database');
-const { createDataAsset } = require('./entities/data-asset');
+const { upsertNmrLedger } = require('./entities/nmr-ledger');
 const { generateRecordId } = require('./data');
 
 const { spawn } = require('child_process');
@@ -138,7 +138,7 @@ class NmrInboxStore {
   constructor(plugin, options = {}) {
     this.plugin = plugin;
     this.app = plugin?.app;
-    this.createDataAsset = options.createDataAsset || createDataAsset;
+    this.registerNmrArchive = options.registerNmrArchive || upsertNmrLedger;
   }
 
   get inboxFolder() {
@@ -442,27 +442,30 @@ class NmrInboxStore {
         await fs.rename(plan.sourcePath, plan.destinationPath);
         archived.push(plan);
         let dataAssetId = '';
+        let ledgerEntryId = '';
         try {
-          const result = await this.createDataAsset(this.app, {
-            title: `${plan.destinationRelativePath} · ${plan.nucleus} NMR`,
-            assetType: 'nmr',
+          const result = await this.registerNmrArchive(this.app, {
+            entryId: operationId,
+            nucleus: plan.nucleus,
             dataPath: plan.destinationPath,
+            archiveRoot,
             projectId: relations.projectId || '',
             project: relations.project || '',
             experimentId: relations.experimentId || '',
             experiment: relations.experiment || '',
             compoundId: relations.compoundId || '',
             compound: relations.compound || '',
-            acquiredAt: plan.modified
-          }, generateRecordId);
-          dataAssetId = result.asset.recordId;
+            archivedAt: new Date().toISOString()
+          });
+          dataAssetId = result.ledgerId;
+          ledgerEntryId = result.entryId;
         } catch (registrationError) {
           const message = registrationError instanceof Error ? registrationError.message : String(registrationError);
           registrationErrors.push({ plan, error: message });
-          console.error('[Research Workbench] NMR DataAsset registration failed', registrationError);
+          console.error('[Research Workbench] NMR ledger registration failed', registrationError);
         }
         try {
-          await this.writeAudit({ ...auditBase, data_asset_id: dataAssetId, timestamp: new Date().toISOString(), status: 'success', ...(dataAssetId ? {} : { registration_error: registrationErrors[registrationErrors.length - 1]?.error || '数据资产登记失败' }) });
+          await this.writeAudit({ ...auditBase, data_asset_id: dataAssetId, nmr_ledger_entry_id: ledgerEntryId, timestamp: new Date().toISOString(), status: 'success', ...(dataAssetId ? {} : { registration_error: registrationErrors[registrationErrors.length - 1]?.error || 'NMR 台账登记失败' }) });
         } catch (auditError) {
           const message = auditError instanceof Error ? auditError.message : String(auditError);
           auditErrors.push({ plan, error: message });
