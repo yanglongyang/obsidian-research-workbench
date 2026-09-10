@@ -16,6 +16,7 @@ const entries = [
   ['./lib/nmr', path.join(pluginDir, 'lib', 'nmr.js')],
   ['./lib/nmr-archive-modal', path.join(pluginDir, 'lib', 'nmr-archive-modal.js')],
   ['./lib/nmr-delete-modal', path.join(pluginDir, 'lib', 'nmr-delete-modal.js')],
+  ['./lib/work-queue', path.join(pluginDir, 'lib', 'work-queue.js')],
   ['./lib/modal', path.join(pluginDir, 'lib', 'modal.js')],
   ['./lib/experiment-modal', path.join(pluginDir, 'lib', 'experiment-modal.js')],
   ['./lib/settings', path.join(pluginDir, 'lib', 'settings.js')],
@@ -39,6 +40,7 @@ function normalizeLocalRequires(id, source) {
       .replace("require('./nmr')", "require('./lib/nmr')")
       .replace("require('./nmr-archive-modal')", "require('./lib/nmr-archive-modal')")
       .replace("require('./nmr-delete-modal')", "require('./lib/nmr-delete-modal')")
+      .replace("require('./work-queue')", "require('./lib/work-queue')")
       .replace("require('./quick-create-modal')", "require('./lib/quick-create-modal')")
       .replace("require('./experiment-modal')", "require('./lib/experiment-modal')")
       .replace("require('./database')", "require('./lib/database')")

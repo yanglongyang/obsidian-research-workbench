@@ -9,12 +9,12 @@ class TaskModal extends Modal {
     this.taskStore = taskStore;
     this.options = options;
     this.state = {
-      title: '',
+      title: String(options.title || ''),
       category: CATEGORIES.includes(options.category) ? options.category : CATEGORIES[0],
-      priority: 'high',
+      priority: ['high', 'medium', 'low'].includes(options.priority) ? options.priority : 'high',
       due: /^\d{4}-\d{2}-\d{2}$/.test(options.due || '') ? options.due : localDate(),
       estimate: 60,
-      details: '',
+      details: String(options.details || ''),
       saving: false
     };
     this.ctaButton = null;
@@ -28,6 +28,7 @@ class TaskModal extends Modal {
     new Setting(contentEl).setName('标题').addText((text) => {
       text.inputEl.placeholder = '例如：整理本周实验结果';
       text.inputEl.required = true;
+      text.setValue(this.state.title);
       text.inputEl.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.isComposing) {
           event.preventDefault();
@@ -67,6 +68,7 @@ class TaskModal extends Modal {
 
     new Setting(contentEl).setName('说明').addTextArea((area) => {
       area.inputEl.rows = 4;
+      area.setValue(this.state.details);
       area.inputEl.placeholder = '完成标准、相关笔记或补充说明';
       area.onChange((value) => { this.state.details = value; });
       area.inputEl.addEventListener('keydown', (event) => {

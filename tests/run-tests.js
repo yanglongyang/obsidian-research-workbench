@@ -31,6 +31,7 @@ const { NMR_LEDGER_PATH, NMR_LEDGER_ID, parseLedgerEntries, upsertNmrLedger, con
 const { PermanentIdMigration } = require('../plugin/lib/migrations/permanent-id');
 const { filterCompoundsByProject, suggestProjectFromCompound } = require('../plugin/lib/experiment-modal');
 const { EntityStore } = require('../plugin/lib/entities/store');
+const { WorkQueueStore } = require('../plugin/lib/work-queue');
 Module._load = originalLoad;
 
 const tests = [];
@@ -239,6 +240,7 @@ test('UI helpers format relative dates and status tones', () => {
   assert.strictEqual(ui.badgeTone('unknown', 'nmr'), 'warning');
   assert.strictEqual(ui.badgeTone('19F', 'nmr'), 'warning');
   assert.strictEqual(ui.VALID_SECTIONS.has('nmr-inbox'), true);
+  assert.strictEqual(ui.VALID_SECTIONS.has('work-queue'), true);
 });
 
 test('Quick Create command activates a closed view before opening modal', async () => {
@@ -446,6 +448,19 @@ test('NMR archive reports real partial failure', async () => {
   assert.strictEqual(result.status, 'partial_failure');
   assert.strictEqual(result.archived.length, 1);
   assert.strictEqual(result.failed.length, 1);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test('work queue summarizes top-level entries and excludes the dedicated NMR inbox', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-work-queue-'));
+  await fs.mkdir(path.join(root, 'project-a', 'raw'), { recursive: true });
+  await fs.mkdir(path.join(root, '待解核磁'), { recursive: true });
+  await fs.writeFile(path.join(root, 'project-a', 'raw', 'result.csv'), 'x');
+  await fs.writeFile(path.join(root, 'brief.docx'), 'draft');
+  const plugin = { settings: { processingInboxFolder: root } };
+  const result = await new WorkQueueStore(plugin).listSource('data');
+  assert.deepStrictEqual(result.entries.map((entry) => entry.name).sort(), ['brief.docx', 'project-a']);
+  assert.strictEqual(result.entries.find((entry) => entry.name === 'project-a').fileCount, 1);
   await fs.rm(root, { recursive: true, force: true });
 });
 

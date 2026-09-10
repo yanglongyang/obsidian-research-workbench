@@ -1895,6 +1895,107 @@ function formatBytes(value) {
 module.exports = { NmrDeleteModal };
 
 },
+"./lib/work-queue": function (module, exports, require) {
+const fs = require('fs/promises');
+const path = require('path');
+const { spawn } = require('child_process');
+
+const WORK_QUEUE_SOURCES = [
+  { id: 'spectra', setting: 'spectrumInboxFolder', label: '待测光谱', description: '待测光谱、质谱、荧光及其分析文件', excludedNames: [] },
+  { id: 'data', setting: 'processingInboxFolder', label: '待处理数据', description: '成像、MTT、HPLC、流式等待处理数据', excludedNames: ['待解核磁'] },
+  { id: 'documents', setting: 'documentInboxFolder', label: '待完成文档', description: '待整理的课题文档、图表与写作材料', excludedNames: [] }
+];
+
+function isWindowsAbsolute(value) { return /^[A-Za-z]:[\\/]/.test(String(value || '')) || String(value || '').startsWith('\\\\'); }
+function resolvePath(value) { const raw = String(value || ''); return isWindowsAbsolute(raw) ? path.win32.normalize(raw) : path.resolve(raw); }
+function insideRoot(candidate, root) {
+  const api = isWindowsAbsolute(candidate) || isWindowsAbsolute(root) ? path.win32 : path;
+  const relative = api.relative(api.resolve(root), api.resolve(candidate));
+  return relative === '' || (!relative.startsWith(`..${api.sep}`) && relative !== '..' && !api.isAbsolute(relative));
+}
+
+async function summarizeDirectory(root, current, summary) {
+  const entries = await fs.readdir(current, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.win32.join(current, entry.name);
+    if (!insideRoot(fullPath, root)) continue;
+    if (entry.isDirectory()) {
+      summary.directoryCount += 1;
+      const stat = await fs.stat(fullPath);
+      if (stat.mtimeMs > summary.modifiedMs) summary.modifiedMs = stat.mtimeMs;
+      await summarizeDirectory(root, fullPath, summary);
+    } else if (entry.isFile()) {
+      const stat = await fs.stat(fullPath);
+      summary.fileCount += 1;
+      summary.totalBytes += stat.size;
+      if (stat.mtimeMs > summary.modifiedMs) summary.modifiedMs = stat.mtimeMs;
+    }
+  }
+}
+
+async function summarizeEntry(root, entry) {
+  const fullPath = path.win32.resolve(root, entry.name);
+  if (!insideRoot(fullPath, root) || fullPath.toLowerCase() === root.toLowerCase()) throw new Error('队列路径不安全');
+  const stat = await fs.lstat(fullPath);
+  if (stat.isSymbolicLink()) throw new Error('不索引符号链接');
+  const summary = { fileCount: 0, directoryCount: 0, totalBytes: 0, modifiedMs: stat.mtimeMs };
+  if (stat.isDirectory()) {
+    summary.directoryCount = 1;
+    await summarizeDirectory(root, fullPath, summary);
+  } else if (stat.isFile()) {
+    summary.fileCount = 1;
+    summary.totalBytes = stat.size;
+  } else {
+    throw new Error('不支持的文件类型');
+  }
+  return { name: entry.name, path: fullPath, kind: stat.isDirectory() ? 'directory' : 'file', extension: stat.isDirectory() ? '' : path.win32.extname(entry.name).toLowerCase(), ...summary, modified: new Date(summary.modifiedMs).toISOString() };
+}
+
+class WorkQueueStore {
+  constructor(plugin) { this.plugin = plugin; }
+
+  source(id) { return WORK_QUEUE_SOURCES.find((item) => item.id === id) || null; }
+  folderFor(id) { const source = this.source(id); return source ? String(this.plugin?.settings?.[source.setting] || '').trim() : ''; }
+
+  async listSource(id) {
+    const source = this.source(id);
+    if (!source) throw new Error('未知待处理队列');
+    const folder = this.folderFor(id);
+    if (!folder) throw new Error(`尚未配置${source.label}目录，请前往 设置 → 科研工作台设置。`);
+    const root = resolvePath(folder);
+    const rootStat = await fs.stat(root);
+    if (!rootStat.isDirectory()) throw new Error(`${source.label}目录不可用`);
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    const excluded = new Set(source.excludedNames.map((name) => name.toLocaleLowerCase()));
+    const results = [];
+    const errors = [];
+    for (const entry of entries) {
+      if (excluded.has(entry.name.toLocaleLowerCase())) continue;
+      try { results.push(await summarizeEntry(root, entry)); }
+      catch (error) { errors.push({ name: entry.name, error: error instanceof Error ? error.message : String(error) }); }
+    }
+    results.sort((a, b) => String(b.modified).localeCompare(String(a.modified)) || a.name.localeCompare(b.name));
+    return { source: { ...source, root }, entries: results, errors };
+  }
+
+  async openEntry(id, entryPath) {
+    const source = this.source(id);
+    const root = resolvePath(this.folderFor(id));
+    const target = resolvePath(entryPath);
+    if (!source || !root || !insideRoot(target, root) || target.toLowerCase() === root.toLowerCase()) throw new Error('拒绝打开队列目录外的路径');
+    await fs.access(target);
+    if (process.platform !== 'win32') throw new Error('当前仅支持 Windows 文件跳转');
+    await new Promise((resolve, reject) => {
+      const child = spawn('explorer.exe', [target], { detached: true, stdio: 'ignore', windowsHide: false });
+      child.once('error', reject);
+      child.once('spawn', () => { child.unref(); resolve(); });
+    });
+  }
+}
+
+module.exports = { WORK_QUEUE_SOURCES, resolvePath, insideRoot, summarizeEntry, WorkQueueStore };
+
+},
 "./lib/modal": function (module, exports, require) {
 const { Modal, Notice, Setting } = require('obsidian');
 const { localDate } = require('./lib/data');
@@ -1907,12 +2008,12 @@ class TaskModal extends Modal {
     this.taskStore = taskStore;
     this.options = options;
     this.state = {
-      title: '',
+      title: String(options.title || ''),
       category: CATEGORIES.includes(options.category) ? options.category : CATEGORIES[0],
-      priority: 'high',
+      priority: ['high', 'medium', 'low'].includes(options.priority) ? options.priority : 'high',
       due: /^\d{4}-\d{2}-\d{2}$/.test(options.due || '') ? options.due : localDate(),
       estimate: 60,
-      details: '',
+      details: String(options.details || ''),
       saving: false
     };
     this.ctaButton = null;
@@ -1926,6 +2027,7 @@ class TaskModal extends Modal {
     new Setting(contentEl).setName('标题').addText((text) => {
       text.inputEl.placeholder = '例如：整理本周实验结果';
       text.inputEl.required = true;
+      text.setValue(this.state.title);
       text.inputEl.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.isComposing) {
           event.preventDefault();
@@ -1965,6 +2067,7 @@ class TaskModal extends Modal {
 
     new Setting(contentEl).setName('说明').addTextArea((area) => {
       area.inputEl.rows = 4;
+      area.setValue(this.state.details);
       area.inputEl.placeholder = '完成标准、相关笔记或补充说明';
       area.onChange((value) => { this.state.details = value; });
       area.inputEl.addEventListener('keydown', (event) => {
@@ -2205,6 +2308,9 @@ const DEFAULT_SETTINGS = {
   openOnStartup: false,
   nmrInboxFolder: '',
   nmrArchiveFolder: '',
+  spectrumInboxFolder: 'E:\\待测光谱',
+  processingInboxFolder: 'E:\\待处理数据',
+  documentInboxFolder: 'E:\\待完成文档',
   uiState: { activeSection: 'today' }
 };
 
@@ -2216,6 +2322,9 @@ function mergeSettings(value) {
     openOnStartup: Boolean(source.openOnStartup ?? DEFAULT_SETTINGS.openOnStartup),
     nmrInboxFolder: String(source.nmrInboxFolder ?? DEFAULT_SETTINGS.nmrInboxFolder).trim(),
     nmrArchiveFolder: String(source.nmrArchiveFolder ?? DEFAULT_SETTINGS.nmrArchiveFolder).trim(),
+    spectrumInboxFolder: String(source.spectrumInboxFolder ?? DEFAULT_SETTINGS.spectrumInboxFolder).trim(),
+    processingInboxFolder: String(source.processingInboxFolder ?? DEFAULT_SETTINGS.processingInboxFolder).trim(),
+    documentInboxFolder: String(source.documentInboxFolder ?? DEFAULT_SETTINGS.documentInboxFolder).trim(),
     uiState: {
       activeSection: typeof source.uiState?.activeSection === 'string' ? source.uiState.activeSection : DEFAULT_SETTINGS.uiState.activeSection
     }
@@ -2251,6 +2360,12 @@ class ResearchWorkbenchSettingTab extends PluginSettingTab {
     containerEl.createEl('p', { text: '路径只在实际使用时检查。插件不会自动移动、删除或覆盖原始数据。' });
     this.addPathSetting(containerEl, 'NMR 待处理目录', '扫描 Bruker 原始采集目录的文件夹。', 'nmrInboxFolder');
     this.addPathSetting(containerEl, 'NMR 归档目录', '按氢谱/碳谱分类的目标根目录。', 'nmrArchiveFolder');
+
+    containerEl.createEl('h3', { text: '待处理队列目录' });
+    containerEl.createEl('p', { text: '看板按顶级文件夹或根目录文件汇总，默认只读扫描；不会自动移动、删除或改写外部文件。待处理数据中的“待解核磁”由专门的核磁页面管理，不会重复列出。' });
+    this.addPathSetting(containerEl, '待测光谱目录', '例如荧光、紫外、质谱等待分析数据。', 'spectrumInboxFolder');
+    this.addPathSetting(containerEl, '待处理数据目录', '例如成像、MTT、HPLC、流式等数据。', 'processingInboxFolder');
+    this.addPathSetting(containerEl, '待完成文档目录', '待整理的课题文档、图表和写作材料。', 'documentInboxFolder');
   }
 
   addPathSetting(containerEl, name, description, key) {
@@ -2263,7 +2378,7 @@ class ResearchWorkbenchSettingTab extends PluginSettingTab {
         .onChange(async (value) => {
           this.plugin.settings[key] = value.trim();
           await this.plugin.saveSettings();
-          if (!this.plugin.settings[key]) new Notice(`${name}为空，NMR页面将提示配置路径。`);
+          if (!this.plugin.settings[key]) new Notice(`${name}为空，对应看板将提示配置路径。`);
         }));
   }
 }
@@ -2590,6 +2705,7 @@ const { ExperimentModal } = require('./lib/experiment-modal');
 const { NmrInboxStore } = require('./lib/nmr');
 const { NmrArchiveModal } = require('./lib/nmr-archive-modal');
 const { NmrDeleteModal } = require('./lib/nmr-delete-modal');
+const { WorkQueueStore, WORK_QUEUE_SOURCES } = require('./lib/work-queue');
 const { QuickCreateModal } = require('./lib/quick-create-modal');
 const { ResearchDatabase } = require('./lib/database');
 const { EntityStore } = require('./lib/entities/store');
@@ -2604,7 +2720,7 @@ const VIEW_TYPE = 'phd-command-center-view';
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 const PRIORITY_LABEL = { high: '高', medium: '中', low: '低' };
 const EXPERIMENT_STATUS_LABEL = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻' };
-const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'experiments', 'compound', 'nmr-inbox', 'data', 'literature', 'writing', 'daily-review', 'research-db', 'integrity']);
+const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'experiments', 'compound', 'nmr-inbox', 'work-queue', 'data', 'literature', 'writing', 'daily-review', 'research-db', 'integrity']);
 
 const NAV_GROUPS = [
   ['总览', [
@@ -2617,7 +2733,8 @@ const NAV_GROUPS = [
     ['experiments', '实验记录', 'test-tube'],
     ['compound', '化合物', 'atom'],
     ['data', '数据资产', 'database'],
-    ['nmr-inbox', '待解核磁', 'scan-line']
+    ['nmr-inbox', '待解核磁', 'scan-line'],
+    ['work-queue', '待处理队列', 'inbox']
   ]],
   ['复盘', [
     ['reviews', '周月总结', 'rotate-ccw'],
@@ -2683,11 +2800,14 @@ class WorkbenchView extends ItemView {
     this.taskStore = new TaskStore(plugin);
     this.researchDatabase = new ResearchDatabase(plugin);
     this.nmrInboxStore = new NmrInboxStore(plugin);
+    this.workQueueStore = new WorkQueueStore(plugin);
     this.entityStore = new EntityStore(plugin);
     this.tasks = [];
     this.nmrScans = [];
     this.nmrError = '';
     this.selectedNmrPaths = new Set();
+    this.workQueue = [];
+    this.workQueueErrors = {};
     this.root = null;
     this.pageEl = null;
     this.searchInput = null;
@@ -2726,6 +2846,7 @@ class WorkbenchView extends ItemView {
       console.error('[Research Workbench] refresh failed', error);
     }
     if (this.activeSection === 'nmr-inbox') await this.refreshNmrInbox(false);
+    if (this.activeSection === 'work-queue') await this.refreshWorkQueue(false);
     this.root.empty();
     this.renderShell();
   }
@@ -2771,6 +2892,7 @@ class WorkbenchView extends ItemView {
         item.createSpan({ cls: 'phdcc-nav-text', text: label });
         if (id === 'today') item.createSpan({ cls: 'phdcc-nav-count', text: String(this.tasks.filter((task) => task.due === localDate() && !isDone(task)).length) });
         if (id === 'nmr-inbox' && this.nmrScans.length) item.createSpan({ cls: 'phdcc-nav-count', text: String(this.nmrScans.length) });
+        if (id === 'work-queue' && this.workQueue.length) item.createSpan({ cls: 'phdcc-nav-count', text: String(this.workQueue.reduce((count, queue) => count + queue.entries.length, 0)) });
         item.addEventListener('click', () => {
           this.activeSection = id;
           this.searchQuery = '';
@@ -2814,6 +2936,7 @@ class WorkbenchView extends ItemView {
       compound: () => pageRenderers.renderCompoundPage(this),
       'research-db': () => pageRenderers.renderResearchDatabasePage(this),
       'nmr-inbox': () => pageRenderers.renderNmrInboxPage(this),
+      'work-queue': () => this._renderWorkQueuePage(),
       data: () => pageRenderers.renderDataPage(this),
       literature: () => this.renderReadOnlyPage('文献资料', LITERATURE_FOLDERS, false),
       writing: () => this.renderReadOnlyPage('写作管线', WRITING_FOLDER, true),
@@ -2912,6 +3035,45 @@ class WorkbenchView extends ItemView {
       this.nmrError = error instanceof Error ? error.message : '无法读取待解核磁目录';
     }
     if (render && this.activeSection === 'nmr-inbox' && this.pageEl) this.renderPage();
+  }
+
+  filteredWorkQueueEntries(entries) {
+    const query = this.searchQuery.trim().toLowerCase();
+    if (!query) return entries;
+    return entries.filter((entry) => `${entry.name} ${entry.path} ${entry.extension}`.toLowerCase().includes(query));
+  }
+
+  async refreshWorkQueue(render = true) {
+    const results = await Promise.all(WORK_QUEUE_SOURCES.map(async (source) => {
+      this.workQueueErrors[source.id] = '';
+      try { return await this.workQueueStore.listSource(source.id); }
+      catch (error) {
+        this.workQueueErrors[source.id] = error instanceof Error ? error.message : '无法读取目录';
+        return { source: { ...source, root: this.workQueueStore.folderFor(source.id) }, entries: [], errors: [] };
+      }
+    }));
+    this.workQueue = results;
+    if (render && this.activeSection === 'work-queue' && this.pageEl) this.renderPage();
+  }
+
+  async openWorkQueueEntry(source, entry) {
+    try {
+      new Notice(`正在打开：${entry.name}`);
+      await this.workQueueStore.openEntry(source.id, entry.path);
+    } catch (error) {
+      new Notice(error instanceof Error ? error.message : '无法打开待处理项目');
+    }
+  }
+
+  openWorkQueueTask(source, entry) {
+    new TaskModal(this.app, this.taskStore, {
+      title: `处理${source.label}：${entry.name}`,
+      category: '实验',
+      priority: 'medium',
+      due: localDate(),
+      details: `来源目录：${entry.path}\n\n完成后请在原始数据位置或实验记录中补充处理结果。`,
+      onCreated: async (file) => { await this.openFile(file); await this.refresh(); }
+    }).open();
   }
 
   openNmrArchiveModal() {
@@ -3297,6 +3459,59 @@ class WorkbenchView extends ItemView {
     const legacy = this.filteredFiles(this.readOnlyItems(DATA_FOLDER, 30, true));
     if (legacy.length) { card.createEl('h3', { text: '旧数据记录（只读）' }); this.renderReadOnlyList(card, legacy, ''); }
     if (!assets.length && !legacy.length) card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配数据资产' : '暂无数据资产' });
+  }
+
+  _renderWorkQueuePage() {
+    this.renderPageHeader('待处理队列', '按顶级文件夹或根目录文件汇总；只读扫描，不会自动移动外部数据');
+    const refresh = this.pageEl.createEl('button', {
+      cls: 'phdcc-page-add phdcc-calendar-add phdcc-nmr-refresh',
+      text: '↻ 刷新待处理队列',
+      attr: { type: 'button', title: '重新读取待测光谱、待处理数据和待完成文档目录' }
+    });
+    refresh.addEventListener('click', async () => {
+      if (refresh.disabled) return;
+      refresh.disabled = true;
+      refresh.textContent = '刷新中…';
+      await this.refreshWorkQueue(false);
+      this.renderPage();
+      const failed = Object.values(this.workQueueErrors).filter(Boolean).length;
+      new Notice(failed ? `待处理队列已刷新；${failed} 个目录读取失败` : `待处理队列已刷新：${this.workQueue.reduce((count, queue) => count + queue.entries.length, 0)} 项`);
+    });
+    const stats = this.pageEl.createDiv({ cls: 'phdcc-stats' });
+    this.workQueue.forEach((queue) => {
+      const card = stats.createDiv({ cls: 'phdcc-stat-card' });
+      card.createDiv({ cls: 'phdcc-stat-label', text: queue.source.label });
+      card.createDiv({ cls: 'phdcc-stat-value', text: String(queue.entries.length) });
+    });
+    this.workQueue.forEach((queue) => this.renderWorkQueueSource(queue));
+  }
+
+  renderWorkQueueSource(queue) {
+    const { source } = queue;
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    card.createEl('h3', { text: source.label });
+    card.createDiv({ cls: 'phdcc-file-meta', text: `${source.description}　·　${source.root || '未配置'}` });
+    const error = this.workQueueErrors[source.id];
+    if (error) {
+      card.createDiv({ cls: 'phdcc-empty', text: `读取失败：${error}` });
+      const settingsHint = card.createEl('button', { cls: 'phdcc-empty-add', text: '打开插件设置', attr: { type: 'button' } });
+      settingsHint.addEventListener('click', () => this.app.setting.open());
+      return;
+    }
+    if (queue.errors.length) card.createDiv({ cls: 'phdcc-file-next', text: `${queue.errors.length} 个项目未能读取，已跳过。` });
+    const entries = this.filteredWorkQueueEntries(queue.entries);
+    if (!entries.length) return void card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配的待处理项目' : '该目录暂无待处理项目' });
+    entries.forEach((entry) => {
+      const row = card.createDiv({ cls: 'phdcc-nmr-row' });
+      const main = row.createDiv({ cls: 'phdcc-nmr-main' });
+      main.createDiv({ cls: 'phdcc-file-title', text: `${entry.kind === 'directory' ? '📁' : '📄'} ${entry.name}` });
+      main.createDiv({ cls: 'phdcc-file-meta', text: `${entry.kind === 'directory' ? `${entry.fileCount} 个文件 · ${entry.directoryCount} 个目录` : entry.extension || '文件'} · ${formatBytes(entry.totalBytes)} · ${new Date(entry.modified).toLocaleString('zh-CN')}` });
+      main.createDiv({ cls: 'phdcc-file-next', text: entry.path });
+      const open = row.createEl('button', { cls: 'phdcc-nmr-open', text: entry.kind === 'directory' ? '打开原始目录' : '打开文件', attr: { type: 'button' } });
+      open.addEventListener('click', () => { void this.openWorkQueueEntry(source, entry); });
+      const task = row.createEl('button', { cls: 'phdcc-nmr-open', text: '新增处理任务', attr: { type: 'button' } });
+      task.addEventListener('click', () => this.openWorkQueueTask(source, entry));
+    });
   }
 
   _renderNmrInboxPage() {

@@ -16,6 +16,7 @@ const { ExperimentModal } = require('./experiment-modal');
 const { NmrInboxStore } = require('./nmr');
 const { NmrArchiveModal } = require('./nmr-archive-modal');
 const { NmrDeleteModal } = require('./nmr-delete-modal');
+const { WorkQueueStore, WORK_QUEUE_SOURCES } = require('./work-queue');
 const { QuickCreateModal } = require('./quick-create-modal');
 const { ResearchDatabase } = require('./database');
 const { EntityStore } = require('./entities/store');
@@ -30,7 +31,7 @@ const VIEW_TYPE = 'phd-command-center-view';
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 const PRIORITY_LABEL = { high: '高', medium: '中', low: '低' };
 const EXPERIMENT_STATUS_LABEL = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻' };
-const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'experiments', 'compound', 'nmr-inbox', 'data', 'literature', 'writing', 'daily-review', 'research-db', 'integrity']);
+const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'experiments', 'compound', 'nmr-inbox', 'work-queue', 'data', 'literature', 'writing', 'daily-review', 'research-db', 'integrity']);
 
 const NAV_GROUPS = [
   ['总览', [
@@ -43,7 +44,8 @@ const NAV_GROUPS = [
     ['experiments', '实验记录', 'test-tube'],
     ['compound', '化合物', 'atom'],
     ['data', '数据资产', 'database'],
-    ['nmr-inbox', '待解核磁', 'scan-line']
+    ['nmr-inbox', '待解核磁', 'scan-line'],
+    ['work-queue', '待处理队列', 'inbox']
   ]],
   ['复盘', [
     ['reviews', '周月总结', 'rotate-ccw'],
@@ -109,11 +111,14 @@ class WorkbenchView extends ItemView {
     this.taskStore = new TaskStore(plugin);
     this.researchDatabase = new ResearchDatabase(plugin);
     this.nmrInboxStore = new NmrInboxStore(plugin);
+    this.workQueueStore = new WorkQueueStore(plugin);
     this.entityStore = new EntityStore(plugin);
     this.tasks = [];
     this.nmrScans = [];
     this.nmrError = '';
     this.selectedNmrPaths = new Set();
+    this.workQueue = [];
+    this.workQueueErrors = {};
     this.root = null;
     this.pageEl = null;
     this.searchInput = null;
@@ -152,6 +157,7 @@ class WorkbenchView extends ItemView {
       console.error('[Research Workbench] refresh failed', error);
     }
     if (this.activeSection === 'nmr-inbox') await this.refreshNmrInbox(false);
+    if (this.activeSection === 'work-queue') await this.refreshWorkQueue(false);
     this.root.empty();
     this.renderShell();
   }
@@ -197,6 +203,7 @@ class WorkbenchView extends ItemView {
         item.createSpan({ cls: 'phdcc-nav-text', text: label });
         if (id === 'today') item.createSpan({ cls: 'phdcc-nav-count', text: String(this.tasks.filter((task) => task.due === localDate() && !isDone(task)).length) });
         if (id === 'nmr-inbox' && this.nmrScans.length) item.createSpan({ cls: 'phdcc-nav-count', text: String(this.nmrScans.length) });
+        if (id === 'work-queue' && this.workQueue.length) item.createSpan({ cls: 'phdcc-nav-count', text: String(this.workQueue.reduce((count, queue) => count + queue.entries.length, 0)) });
         item.addEventListener('click', () => {
           this.activeSection = id;
           this.searchQuery = '';
@@ -240,6 +247,7 @@ class WorkbenchView extends ItemView {
       compound: () => pageRenderers.renderCompoundPage(this),
       'research-db': () => pageRenderers.renderResearchDatabasePage(this),
       'nmr-inbox': () => pageRenderers.renderNmrInboxPage(this),
+      'work-queue': () => this._renderWorkQueuePage(),
       data: () => pageRenderers.renderDataPage(this),
       literature: () => this.renderReadOnlyPage('文献资料', LITERATURE_FOLDERS, false),
       writing: () => this.renderReadOnlyPage('写作管线', WRITING_FOLDER, true),
@@ -338,6 +346,45 @@ class WorkbenchView extends ItemView {
       this.nmrError = error instanceof Error ? error.message : '无法读取待解核磁目录';
     }
     if (render && this.activeSection === 'nmr-inbox' && this.pageEl) this.renderPage();
+  }
+
+  filteredWorkQueueEntries(entries) {
+    const query = this.searchQuery.trim().toLowerCase();
+    if (!query) return entries;
+    return entries.filter((entry) => `${entry.name} ${entry.path} ${entry.extension}`.toLowerCase().includes(query));
+  }
+
+  async refreshWorkQueue(render = true) {
+    const results = await Promise.all(WORK_QUEUE_SOURCES.map(async (source) => {
+      this.workQueueErrors[source.id] = '';
+      try { return await this.workQueueStore.listSource(source.id); }
+      catch (error) {
+        this.workQueueErrors[source.id] = error instanceof Error ? error.message : '无法读取目录';
+        return { source: { ...source, root: this.workQueueStore.folderFor(source.id) }, entries: [], errors: [] };
+      }
+    }));
+    this.workQueue = results;
+    if (render && this.activeSection === 'work-queue' && this.pageEl) this.renderPage();
+  }
+
+  async openWorkQueueEntry(source, entry) {
+    try {
+      new Notice(`正在打开：${entry.name}`);
+      await this.workQueueStore.openEntry(source.id, entry.path);
+    } catch (error) {
+      new Notice(error instanceof Error ? error.message : '无法打开待处理项目');
+    }
+  }
+
+  openWorkQueueTask(source, entry) {
+    new TaskModal(this.app, this.taskStore, {
+      title: `处理${source.label}：${entry.name}`,
+      category: '实验',
+      priority: 'medium',
+      due: localDate(),
+      details: `来源目录：${entry.path}\n\n完成后请在原始数据位置或实验记录中补充处理结果。`,
+      onCreated: async (file) => { await this.openFile(file); await this.refresh(); }
+    }).open();
   }
 
   openNmrArchiveModal() {
@@ -723,6 +770,59 @@ class WorkbenchView extends ItemView {
     const legacy = this.filteredFiles(this.readOnlyItems(DATA_FOLDER, 30, true));
     if (legacy.length) { card.createEl('h3', { text: '旧数据记录（只读）' }); this.renderReadOnlyList(card, legacy, ''); }
     if (!assets.length && !legacy.length) card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配数据资产' : '暂无数据资产' });
+  }
+
+  _renderWorkQueuePage() {
+    this.renderPageHeader('待处理队列', '按顶级文件夹或根目录文件汇总；只读扫描，不会自动移动外部数据');
+    const refresh = this.pageEl.createEl('button', {
+      cls: 'phdcc-page-add phdcc-calendar-add phdcc-nmr-refresh',
+      text: '↻ 刷新待处理队列',
+      attr: { type: 'button', title: '重新读取待测光谱、待处理数据和待完成文档目录' }
+    });
+    refresh.addEventListener('click', async () => {
+      if (refresh.disabled) return;
+      refresh.disabled = true;
+      refresh.textContent = '刷新中…';
+      await this.refreshWorkQueue(false);
+      this.renderPage();
+      const failed = Object.values(this.workQueueErrors).filter(Boolean).length;
+      new Notice(failed ? `待处理队列已刷新；${failed} 个目录读取失败` : `待处理队列已刷新：${this.workQueue.reduce((count, queue) => count + queue.entries.length, 0)} 项`);
+    });
+    const stats = this.pageEl.createDiv({ cls: 'phdcc-stats' });
+    this.workQueue.forEach((queue) => {
+      const card = stats.createDiv({ cls: 'phdcc-stat-card' });
+      card.createDiv({ cls: 'phdcc-stat-label', text: queue.source.label });
+      card.createDiv({ cls: 'phdcc-stat-value', text: String(queue.entries.length) });
+    });
+    this.workQueue.forEach((queue) => this.renderWorkQueueSource(queue));
+  }
+
+  renderWorkQueueSource(queue) {
+    const { source } = queue;
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    card.createEl('h3', { text: source.label });
+    card.createDiv({ cls: 'phdcc-file-meta', text: `${source.description}　·　${source.root || '未配置'}` });
+    const error = this.workQueueErrors[source.id];
+    if (error) {
+      card.createDiv({ cls: 'phdcc-empty', text: `读取失败：${error}` });
+      const settingsHint = card.createEl('button', { cls: 'phdcc-empty-add', text: '打开插件设置', attr: { type: 'button' } });
+      settingsHint.addEventListener('click', () => this.app.setting.open());
+      return;
+    }
+    if (queue.errors.length) card.createDiv({ cls: 'phdcc-file-next', text: `${queue.errors.length} 个项目未能读取，已跳过。` });
+    const entries = this.filteredWorkQueueEntries(queue.entries);
+    if (!entries.length) return void card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配的待处理项目' : '该目录暂无待处理项目' });
+    entries.forEach((entry) => {
+      const row = card.createDiv({ cls: 'phdcc-nmr-row' });
+      const main = row.createDiv({ cls: 'phdcc-nmr-main' });
+      main.createDiv({ cls: 'phdcc-file-title', text: `${entry.kind === 'directory' ? '📁' : '📄'} ${entry.name}` });
+      main.createDiv({ cls: 'phdcc-file-meta', text: `${entry.kind === 'directory' ? `${entry.fileCount} 个文件 · ${entry.directoryCount} 个目录` : entry.extension || '文件'} · ${formatBytes(entry.totalBytes)} · ${new Date(entry.modified).toLocaleString('zh-CN')}` });
+      main.createDiv({ cls: 'phdcc-file-next', text: entry.path });
+      const open = row.createEl('button', { cls: 'phdcc-nmr-open', text: entry.kind === 'directory' ? '打开原始目录' : '打开文件', attr: { type: 'button' } });
+      open.addEventListener('click', () => { void this.openWorkQueueEntry(source, entry); });
+      const task = row.createEl('button', { cls: 'phdcc-nmr-open', text: '新增处理任务', attr: { type: 'button' } });
+      task.addEventListener('click', () => this.openWorkQueueTask(source, entry));
+    });
   }
 
   _renderNmrInboxPage() {
