@@ -198,7 +198,7 @@ class NmrInboxStore {
     return results.sort((a, b) => String(b.modified).localeCompare(String(a.modified)) || a.relativeScanPath.localeCompare(b.relativeScanPath));
   }
 
-  async preflightArchive(relativePaths, renameMap = {}) {
+  async preflightArchive(relativePaths, batchRenameMap = {}) {
     const requested = [...new Set((Array.isArray(relativePaths) ? relativePaths : []).filter((value) => typeof value === 'string' && value))];
     if (!requested.length) return { plans: [], errors: ['请至少勾选一套待解核磁。'] };
     const scans = await this.listPendingScans();
@@ -230,10 +230,16 @@ class NmrInboxStore {
         errors.push(`${relativePath}：缺少 fid，不能作为完整原始数据归档。`);
         continue;
       }
-      let folderName;
-      try { folderName = archiveFolderName(renameMap[scan.relativeScanPath], path.win32.basename(scan.relativeScanPath)); }
+      const scanFolderName = path.win32.basename(scan.relativeScanPath);
+      const originalBatchPath = scan.parentPath;
+      const originalBatchName = originalBatchPath ? path.win32.basename(originalBatchPath) : '';
+      let archiveBatchName;
+      try { archiveBatchName = originalBatchPath ? archiveFolderName(batchRenameMap[originalBatchPath], originalBatchName) : ''; }
       catch (error) { errors.push(`${relativePath}：${error instanceof Error ? error.message : String(error)}`); continue; }
-      const destinationRelativePath = scan.parentPath ? path.win32.join(scan.parentPath, folderName) : folderName;
+      const batchParentPath = originalBatchPath && path.win32.dirname(originalBatchPath) !== '.' ? path.win32.dirname(originalBatchPath) : '';
+      const destinationRelativePath = originalBatchPath
+        ? path.win32.join(batchParentPath, archiveBatchName, scanFolderName)
+        : scanFolderName;
       const destinationPath = path.win32.resolve(archiveRoot, category, destinationRelativePath);
       if (!insideRoot(destinationPath, archiveRoot)) {
         errors.push(`${relativePath}：目标路径不安全。`);
@@ -257,7 +263,10 @@ class NmrInboxStore {
         ...scan,
         sourcePath,
         category,
-        archiveFolderName: folderName,
+        scanFolderName,
+        originalBatchPath,
+        originalBatchName,
+        archiveBatchName,
         destinationPath,
         destinationRelativePath: path.win32.relative(archiveRoot, destinationPath),
         siblingFiles: await siblingFiles(sourcePath)
@@ -283,8 +292,8 @@ class NmrInboxStore {
     else await this.app.vault.append(file, line);
   }
 
-  async archiveSelected(relativePaths, relations = {}, renameMap = {}) {
-    const { plans, errors } = await this.preflightArchive(relativePaths, renameMap);
+  async archiveSelected(relativePaths, relations = {}, batchRenameMap = {}) {
+    const { plans, errors } = await this.preflightArchive(relativePaths, batchRenameMap);
     if (errors.length) return { status: 'failed', archived: [], failed: errors.map((error) => ({ error })), skipped: [], auditErrors: [], registrationErrors: [], errors };
     const archiveRoot = resolveNmrPath(this.archiveFolder);
     const archived = [];
@@ -304,9 +313,11 @@ class NmrInboxStore {
         source: plan.sourcePath,
         destination: plan.destinationPath,
         relative_path: plan.relativeScanPath,
-        original_folder_name: path.win32.basename(plan.relativeScanPath),
-        archive_folder_name: plan.archiveFolderName,
-        renamed: path.win32.basename(plan.relativeScanPath) !== plan.archiveFolderName,
+        scan_folder_name: plan.scanFolderName,
+        original_batch_path: plan.originalBatchPath,
+        original_batch_folder_name: plan.originalBatchName,
+        archive_batch_folder_name: plan.archiveBatchName,
+        renamed_batch: Boolean(plan.originalBatchName && plan.originalBatchName !== plan.archiveBatchName),
         nucleus: plan.nucleus,
         file_count: plan.fileCount,
         directory_count: plan.directoryCount,

@@ -14,7 +14,7 @@ class NmrArchiveModal extends Modal {
     this.ctaButton = null;
     this.body = null;
     this.relations = { projectId: '', project: '', experimentId: '', experiment: '', compoundId: '', compound: '' };
-    this.renameNames = {};
+    this.batchRenameNames = {};
   }
 
   onOpen() {
@@ -103,18 +103,20 @@ class NmrArchiveModal extends Modal {
       transfer.createDiv({ cls: 'phdcc-archive-arrow', text: '↓ 移动至' });
       transfer.createDiv({ cls: 'phdcc-archive-label', text: '目标' });
       transfer.createDiv({ cls: 'phdcc-archive-path', text: plan.destinationPath });
-      const rename = new Setting(row).setName('归档文件夹名称').setDesc('默认沿用原名称，可改为你的常用命名');
-      rename.addText((text) => {
-        const defaultName = path.win32.basename(plan.relativeScanPath);
-        this.renameNames[plan.relativeScanPath] = this.renameNames[plan.relativeScanPath] || defaultName;
-        text.setValue(this.renameNames[plan.relativeScanPath]);
-        text.inputEl.addEventListener('input', () => {
-          this.renameNames[plan.relativeScanPath] = text.getValue().trim();
-          const parent = path.win32.dirname(plan.destinationPath);
-          const previewName = this.renameNames[plan.relativeScanPath] || defaultName;
-          transfer.querySelector('.phdcc-archive-path:last-child')?.setText(path.win32.join(parent, previewName));
+      if (plan.originalBatchPath) {
+        const rename = new Setting(row).setName('归档批次文件夹名称').setDesc(`保留扫描号 ${plan.scanFolderName}；这里改的是 ${plan.originalBatchName}`);
+        rename.addText((text) => {
+          const defaultName = plan.originalBatchName;
+          this.batchRenameNames[plan.originalBatchPath] = this.batchRenameNames[plan.originalBatchPath] || defaultName;
+          text.setValue(this.batchRenameNames[plan.originalBatchPath]);
+          text.inputEl.addEventListener('input', () => {
+            this.batchRenameNames[plan.originalBatchPath] = text.getValue().trim();
+            const batchRoot = path.win32.dirname(path.win32.dirname(plan.destinationPath));
+            const previewName = this.batchRenameNames[plan.originalBatchPath] || defaultName;
+            transfer.querySelector('.phdcc-archive-path:last-child')?.setText(path.win32.join(batchRoot, previewName, plan.scanFolderName));
+          });
         });
-      });
+      }
       const checks = row.createDiv({ cls: 'phdcc-archive-checks' });
       ['✓ fid 完整', '✓ 核种已识别', '✓ 路径安全', '✓ 同一磁盘', '✓ 目标不存在'].forEach((text) => checks.createSpan({ cls: 'phdcc-badge is-success', text }));
       if (plan.siblingFiles.length) row.createDiv({ cls: 'phdcc-file-next', text: `提示：同级有 ${plan.siblingFiles.length} 个附带文件，不会随原始采集目录移动。` });
@@ -129,7 +131,7 @@ class NmrArchiveModal extends Modal {
     this.ctaButton.disabled = true;
     this.ctaButton.setText('归档中…');
     try {
-      const result = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath), this.relations, this.renameNames);
+      const result = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath), this.relations, this.batchRenameNames);
       if (typeof this.options.onArchived === 'function') await this.options.onArchived(result);
       if (result.status === 'completed') {
         this.close();

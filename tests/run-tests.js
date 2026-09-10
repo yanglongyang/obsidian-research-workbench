@@ -280,20 +280,20 @@ test('NMR preflight rejects missing fid, unknown nucleus, existing destination a
   await fs.rm(root, { recursive: true, force: true });
 });
 
-test('NMR archive supports safe custom folder names and rejects duplicate destinations', async () => {
+test('NMR archive renames the batch folder while preserving scan folders', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-rename-'));
   const inbox = path.join(root, 'inbox'); const archive = path.join(root, 'archive');
-  await fs.mkdir(inbox, { recursive: true }); await makeScan(inbox, 'raw-a', '1H', true); await makeScan(inbox, 'raw-b', '1H', true);
+  await fs.mkdir(inbox, { recursive: true }); await makeScan(inbox, 'old-batch\\10', '1H', true); await makeScan(inbox, 'other-batch\\10', '1H', true);
   const store = new nmr.NmrInboxStore(pluginFor(inbox, archive));
-  const renamed = await store.preflightArchive(['raw-a'], { 'raw-a': 'YLY-145-1H' });
-  assert.strictEqual(renamed.errors.length, 0); assert.match(renamed.plans[0].destinationPath, /YLY-145-1H$/);
-  const duplicate = await store.preflightArchive(['raw-a', 'raw-b'], { 'raw-a': 'same', 'raw-b': 'same' });
+  const renamed = await store.preflightArchive(['old-batch\\10'], { 'old-batch': 'YLY-145' });
+  assert.strictEqual(renamed.errors.length, 0); assert.match(renamed.plans[0].destinationPath, /YLY-145\\10$/); assert.strictEqual(renamed.plans[0].scanFolderName, '10');
+  const duplicate = await store.preflightArchive(['old-batch\\10', 'other-batch\\10'], { 'old-batch': 'same', 'other-batch': 'same' });
   assert.ok(duplicate.errors.some((error) => /重复/.test(error)));
-  const invalid = await store.preflightArchive(['raw-a'], { 'raw-a': 'bad/name' });
+  const invalid = await store.preflightArchive(['old-batch\\10'], { 'old-batch': 'bad/name' });
   assert.ok(invalid.errors.some((error) => /不允许/.test(error)));
-  const result = await store.archiveSelected(['raw-a'], {}, { 'raw-a': 'YLY-145-1H' });
+  const result = await store.archiveSelected(['old-batch\\10'], {}, { 'old-batch': 'YLY-145' });
   assert.strictEqual(result.status, 'completed');
-  assert.strictEqual(await fs.access(path.join(archive, '氢谱', 'YLY-145-1H')).then(() => true), true);
+  assert.strictEqual(await fs.access(path.join(archive, '氢谱', 'YLY-145', '10')).then(() => true), true);
   await fs.rm(root, { recursive: true, force: true });
 });
 

@@ -9,7 +9,7 @@
 - 关系检查增加跨 Project / Experiment / Compound / DataAsset 的 `relation_conflict` 检测。
 - 实验和 NMR 关系下拉框增加轻量联动与冲突提醒。
 - 锁定 NMR → DataAsset 的成功、注册失败、最终审计失败和 started 审计失败语义。
-- NMR 归档确认支持自定义目标文件夹名称，并拒绝非法名称和批量目标冲突。
+- NMR 归档确认支持重命名批次文件夹、保留扫描号，并拒绝非法名称和批量目标冲突。
 
 ### Changed
 
