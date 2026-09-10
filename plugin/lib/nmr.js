@@ -48,6 +48,13 @@ function archiveCategory(nucleus) {
   return NUCLEUS_ARCHIVE_MAP[nucleus] || '';
 }
 
+function archiveFolderName(value, fallback = '') {
+  const name = String(value || fallback || '').trim();
+  if (!name) throw new Error('归档文件夹名称不能为空');
+  if (name === '.' || name === '..' || /[<>:"/\\|?*\u0000-\u001F\u007F]/.test(name) || /[. ]$/.test(name) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name)) throw new Error('归档文件夹名称包含 Windows 不允许的字符');
+  return name.slice(0, 120);
+}
+
 function archiveBatchStatus(archivedCount, failedCount) {
   const archived = Number(archivedCount) || 0;
   const failed = Number(failedCount) || 0;
@@ -191,7 +198,7 @@ class NmrInboxStore {
     return results.sort((a, b) => String(b.modified).localeCompare(String(a.modified)) || a.relativeScanPath.localeCompare(b.relativeScanPath));
   }
 
-  async preflightArchive(relativePaths) {
+  async preflightArchive(relativePaths, renameMap = {}) {
     const requested = [...new Set((Array.isArray(relativePaths) ? relativePaths : []).filter((value) => typeof value === 'string' && value))];
     if (!requested.length) return { plans: [], errors: ['请至少勾选一套待解核磁。'] };
     const scans = await this.listPendingScans();
@@ -202,6 +209,7 @@ class NmrInboxStore {
     const archiveRoot = resolveNmrPath(this.archiveFolder);
     const plans = [];
     const errors = [];
+    const plannedDestinations = new Map();
     for (const relativePath of requested) {
       const scan = byPath.get(relativePath);
       if (!scan) {
@@ -222,7 +230,11 @@ class NmrInboxStore {
         errors.push(`${relativePath}：缺少 fid，不能作为完整原始数据归档。`);
         continue;
       }
-      const destinationPath = path.win32.resolve(archiveRoot, category, scan.relativeScanPath);
+      let folderName;
+      try { folderName = archiveFolderName(renameMap[scan.relativeScanPath], path.win32.basename(scan.relativeScanPath)); }
+      catch (error) { errors.push(`${relativePath}：${error instanceof Error ? error.message : String(error)}`); continue; }
+      const destinationRelativePath = scan.parentPath ? path.win32.join(scan.parentPath, folderName) : folderName;
+      const destinationPath = path.win32.resolve(archiveRoot, category, destinationRelativePath);
       if (!insideRoot(destinationPath, archiveRoot)) {
         errors.push(`${relativePath}：目标路径不安全。`);
         continue;
@@ -235,10 +247,17 @@ class NmrInboxStore {
         errors.push(`${relativePath}：目标已存在，不会覆盖。`);
         continue;
       }
+      const duplicateKey = destinationPath.toLowerCase();
+      if (plannedDestinations.has(duplicateKey)) {
+        errors.push(`${relativePath}：改名后的目标与 ${plannedDestinations.get(duplicateKey)} 重复，不会覆盖。`);
+        continue;
+      }
+      plannedDestinations.set(duplicateKey, relativePath);
       plans.push({
         ...scan,
         sourcePath,
         category,
+        archiveFolderName: folderName,
         destinationPath,
         destinationRelativePath: path.win32.relative(archiveRoot, destinationPath),
         siblingFiles: await siblingFiles(sourcePath)
@@ -264,8 +283,8 @@ class NmrInboxStore {
     else await this.app.vault.append(file, line);
   }
 
-  async archiveSelected(relativePaths, relations = {}) {
-    const { plans, errors } = await this.preflightArchive(relativePaths);
+  async archiveSelected(relativePaths, relations = {}, renameMap = {}) {
+    const { plans, errors } = await this.preflightArchive(relativePaths, renameMap);
     if (errors.length) return { status: 'failed', archived: [], failed: errors.map((error) => ({ error })), skipped: [], auditErrors: [], registrationErrors: [], errors };
     const archiveRoot = resolveNmrPath(this.archiveFolder);
     const archived = [];
@@ -285,6 +304,9 @@ class NmrInboxStore {
         source: plan.sourcePath,
         destination: plan.destinationPath,
         relative_path: plan.relativeScanPath,
+        original_folder_name: path.win32.basename(plan.relativeScanPath),
+        archive_folder_name: plan.archiveFolderName,
+        renamed: path.win32.basename(plan.relativeScanPath) !== plan.archiveFolderName,
         nucleus: plan.nucleus,
         file_count: plan.fileCount,
         directory_count: plan.directoryCount,
@@ -309,7 +331,7 @@ class NmrInboxStore {
         let dataAssetId = '';
         try {
           const result = await this.createDataAsset(this.app, {
-            title: `${plan.relativeScanPath} · ${plan.nucleus} NMR`,
+            title: `${plan.destinationRelativePath} · ${plan.nucleus} NMR`,
             assetType: 'nmr',
             dataPath: plan.destinationPath,
             projectId: relations.projectId || '',
@@ -356,6 +378,7 @@ module.exports = {
   classifyNucleus,
   insideRoot,
   archiveCategory,
+  archiveFolderName,
   archiveBatchStatus,
   resolveNmrPath,
   volumeRoot,

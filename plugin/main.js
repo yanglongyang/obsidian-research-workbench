@@ -1013,6 +1013,13 @@ function archiveCategory(nucleus) {
   return NUCLEUS_ARCHIVE_MAP[nucleus] || '';
 }
 
+function archiveFolderName(value, fallback = '') {
+  const name = String(value || fallback || '').trim();
+  if (!name) throw new Error('归档文件夹名称不能为空');
+  if (name === '.' || name === '..' || /[<>:"/\\|?*\u0000-\u001F\u007F]/.test(name) || /[. ]$/.test(name) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name)) throw new Error('归档文件夹名称包含 Windows 不允许的字符');
+  return name.slice(0, 120);
+}
+
 function archiveBatchStatus(archivedCount, failedCount) {
   const archived = Number(archivedCount) || 0;
   const failed = Number(failedCount) || 0;
@@ -1156,7 +1163,7 @@ class NmrInboxStore {
     return results.sort((a, b) => String(b.modified).localeCompare(String(a.modified)) || a.relativeScanPath.localeCompare(b.relativeScanPath));
   }
 
-  async preflightArchive(relativePaths) {
+  async preflightArchive(relativePaths, renameMap = {}) {
     const requested = [...new Set((Array.isArray(relativePaths) ? relativePaths : []).filter((value) => typeof value === 'string' && value))];
     if (!requested.length) return { plans: [], errors: ['请至少勾选一套待解核磁。'] };
     const scans = await this.listPendingScans();
@@ -1167,6 +1174,7 @@ class NmrInboxStore {
     const archiveRoot = resolveNmrPath(this.archiveFolder);
     const plans = [];
     const errors = [];
+    const plannedDestinations = new Map();
     for (const relativePath of requested) {
       const scan = byPath.get(relativePath);
       if (!scan) {
@@ -1187,7 +1195,11 @@ class NmrInboxStore {
         errors.push(`${relativePath}：缺少 fid，不能作为完整原始数据归档。`);
         continue;
       }
-      const destinationPath = path.win32.resolve(archiveRoot, category, scan.relativeScanPath);
+      let folderName;
+      try { folderName = archiveFolderName(renameMap[scan.relativeScanPath], path.win32.basename(scan.relativeScanPath)); }
+      catch (error) { errors.push(`${relativePath}：${error instanceof Error ? error.message : String(error)}`); continue; }
+      const destinationRelativePath = scan.parentPath ? path.win32.join(scan.parentPath, folderName) : folderName;
+      const destinationPath = path.win32.resolve(archiveRoot, category, destinationRelativePath);
       if (!insideRoot(destinationPath, archiveRoot)) {
         errors.push(`${relativePath}：目标路径不安全。`);
         continue;
@@ -1200,10 +1212,17 @@ class NmrInboxStore {
         errors.push(`${relativePath}：目标已存在，不会覆盖。`);
         continue;
       }
+      const duplicateKey = destinationPath.toLowerCase();
+      if (plannedDestinations.has(duplicateKey)) {
+        errors.push(`${relativePath}：改名后的目标与 ${plannedDestinations.get(duplicateKey)} 重复，不会覆盖。`);
+        continue;
+      }
+      plannedDestinations.set(duplicateKey, relativePath);
       plans.push({
         ...scan,
         sourcePath,
         category,
+        archiveFolderName: folderName,
         destinationPath,
         destinationRelativePath: path.win32.relative(archiveRoot, destinationPath),
         siblingFiles: await siblingFiles(sourcePath)
@@ -1229,8 +1248,8 @@ class NmrInboxStore {
     else await this.app.vault.append(file, line);
   }
 
-  async archiveSelected(relativePaths, relations = {}) {
-    const { plans, errors } = await this.preflightArchive(relativePaths);
+  async archiveSelected(relativePaths, relations = {}, renameMap = {}) {
+    const { plans, errors } = await this.preflightArchive(relativePaths, renameMap);
     if (errors.length) return { status: 'failed', archived: [], failed: errors.map((error) => ({ error })), skipped: [], auditErrors: [], registrationErrors: [], errors };
     const archiveRoot = resolveNmrPath(this.archiveFolder);
     const archived = [];
@@ -1250,6 +1269,9 @@ class NmrInboxStore {
         source: plan.sourcePath,
         destination: plan.destinationPath,
         relative_path: plan.relativeScanPath,
+        original_folder_name: path.win32.basename(plan.relativeScanPath),
+        archive_folder_name: plan.archiveFolderName,
+        renamed: path.win32.basename(plan.relativeScanPath) !== plan.archiveFolderName,
         nucleus: plan.nucleus,
         file_count: plan.fileCount,
         directory_count: plan.directoryCount,
@@ -1274,7 +1296,7 @@ class NmrInboxStore {
         let dataAssetId = '';
         try {
           const result = await this.createDataAsset(this.app, {
-            title: `${plan.relativeScanPath} · ${plan.nucleus} NMR`,
+            title: `${plan.destinationRelativePath} · ${plan.nucleus} NMR`,
             assetType: 'nmr',
             dataPath: plan.destinationPath,
             projectId: relations.projectId || '',
@@ -1321,6 +1343,7 @@ module.exports = {
   classifyNucleus,
   insideRoot,
   archiveCategory,
+  archiveFolderName,
   archiveBatchStatus,
   resolveNmrPath,
   volumeRoot,
@@ -1330,6 +1353,7 @@ module.exports = {
 },
 "./lib/nmr-archive-modal": function (module, exports, require) {
 const { Modal, Notice, Setting } = require('obsidian');
+const path = require('path');
 
 class NmrArchiveModal extends Modal {
   constructor(app, nmrInboxStore, relativePaths, options = {}) {
@@ -1344,6 +1368,7 @@ class NmrArchiveModal extends Modal {
     this.ctaButton = null;
     this.body = null;
     this.relations = { projectId: '', project: '', experimentId: '', experiment: '', compoundId: '', compound: '' };
+    this.renameNames = {};
   }
 
   onOpen() {
@@ -1432,6 +1457,18 @@ class NmrArchiveModal extends Modal {
       transfer.createDiv({ cls: 'phdcc-archive-arrow', text: '↓ 移动至' });
       transfer.createDiv({ cls: 'phdcc-archive-label', text: '目标' });
       transfer.createDiv({ cls: 'phdcc-archive-path', text: plan.destinationPath });
+      const rename = new Setting(row).setName('归档文件夹名称').setDesc('默认沿用原名称，可改为你的常用命名');
+      rename.addText((text) => {
+        const defaultName = path.win32.basename(plan.relativeScanPath);
+        this.renameNames[plan.relativeScanPath] = this.renameNames[plan.relativeScanPath] || defaultName;
+        text.setValue(this.renameNames[plan.relativeScanPath]);
+        text.inputEl.addEventListener('input', () => {
+          this.renameNames[plan.relativeScanPath] = text.getValue().trim();
+          const parent = path.win32.dirname(plan.destinationPath);
+          const previewName = this.renameNames[plan.relativeScanPath] || defaultName;
+          transfer.querySelector('.phdcc-archive-path:last-child')?.setText(path.win32.join(parent, previewName));
+        });
+      });
       const checks = row.createDiv({ cls: 'phdcc-archive-checks' });
       ['✓ fid 完整', '✓ 核种已识别', '✓ 路径安全', '✓ 同一磁盘', '✓ 目标不存在'].forEach((text) => checks.createSpan({ cls: 'phdcc-badge is-success', text }));
       if (plan.siblingFiles.length) row.createDiv({ cls: 'phdcc-file-next', text: `提示：同级有 ${plan.siblingFiles.length} 个附带文件，不会随原始采集目录移动。` });
@@ -1446,7 +1483,7 @@ class NmrArchiveModal extends Modal {
     this.ctaButton.disabled = true;
     this.ctaButton.setText('归档中…');
     try {
-      const result = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath), this.relations);
+      const result = await this.nmrInboxStore.archiveSelected(this.plans.map((plan) => plan.relativeScanPath), this.relations, this.renameNames);
       if (typeof this.options.onArchived === 'function') await this.options.onArchived(result);
       if (result.status === 'completed') {
         this.close();
