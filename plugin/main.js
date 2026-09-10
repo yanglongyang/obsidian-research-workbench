@@ -1155,12 +1155,114 @@ class NmrInboxStore {
   async listPendingScans() {
     const configurationError = this.getConfigurationError();
     if (configurationError) throw new Error(configurationError);
+    return this.listInboxScans();
+  }
+
+  async listInboxScans() {
+    if (!this.inboxFolder) throw new Error('尚未配置 NMR 待处理目录，请前往 设置 → 科研工作台设置。');
     const root = resolveNmrPath(this.inboxFolder);
     const rootStat = await fs.stat(root);
     if (!rootStat.isDirectory()) throw new Error('待解核磁目录不可用');
     const results = [];
     await scanDirectory(root, root, results);
     return results.sort((a, b) => String(b.modified).localeCompare(String(a.modified)) || a.relativeScanPath.localeCompare(b.relativeScanPath));
+  }
+
+  async preflightDelete(relativePaths) {
+    const requested = [...new Set((Array.isArray(relativePaths) ? relativePaths : []).filter((value) => typeof value === 'string' && value))];
+    if (!requested.length) return { plans: [], errors: ['请至少勾选一套待解核磁。'] };
+
+    const inboxRoot = resolveNmrPath(this.inboxFolder);
+    let scans;
+    try {
+      scans = await this.listInboxScans();
+    } catch (error) {
+      return { plans: [], errors: [error instanceof Error ? error.message : '无法读取待解核磁目录'] };
+    }
+    const byPath = new Map(scans.map((scan) => [scan.relativeScanPath, scan]));
+    const plans = [];
+    const errors = [];
+    for (const relativePath of requested) {
+      const scan = byPath.get(relativePath);
+      if (!scan) {
+        errors.push(`${relativePath}：不在待解核磁目录中，可能已被移动或删除。`);
+        continue;
+      }
+      const sourcePath = path.win32.resolve(inboxRoot, scan.relativeScanPath);
+      if (!insideRoot(sourcePath, inboxRoot) || sourcePath.toLowerCase() === inboxRoot.toLowerCase()) {
+        errors.push(`${relativePath}：来源路径不安全。`);
+        continue;
+      }
+      try {
+        const sourceStat = await fs.lstat(sourcePath);
+        if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) throw new Error('不是可安全删除的原始数据目录');
+      } catch (error) {
+        errors.push(`${relativePath}：${error instanceof Error ? error.message : '来源目录不可用'}`);
+        continue;
+      }
+      const nestedScan = scans.find((other) => other.relativeScanPath !== scan.relativeScanPath && insideRoot(other.scanFolder, sourcePath));
+      if (nestedScan) {
+        errors.push(`${relativePath}：目录中包含另一套采集数据 ${nestedScan.relativeScanPath}，拒绝删除。`);
+        continue;
+      }
+      plans.push({ ...scan, sourcePath });
+    }
+    return { plans, errors };
+  }
+
+  async deleteSelected(relativePaths) {
+    const { plans, errors } = await this.preflightDelete(relativePaths);
+    if (errors.length) return { status: 'failed', deleted: [], failed: errors.map((error) => ({ error })), auditErrors: [], errors };
+
+    const inboxRoot = resolveNmrPath(this.inboxFolder);
+    const deleted = [];
+    const failed = [];
+    const auditErrors = [];
+    for (const plan of plans) {
+      if (!insideRoot(plan.sourcePath, inboxRoot) || plan.sourcePath.toLowerCase() === inboxRoot.toLowerCase()) {
+        failed.push({ plan, error: '删除路径校验失败' });
+        continue;
+      }
+      const operationId = `NMRDEL-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      const auditBase = {
+        delete_id: operationId,
+        operation: 'delete',
+        timestamp: new Date().toISOString(),
+        source: plan.sourcePath,
+        relative_path: plan.relativeScanPath,
+        nucleus: plan.nucleus,
+        file_count: plan.fileCount,
+        directory_count: plan.directoryCount,
+        total_bytes: plan.totalBytes
+      };
+      try {
+        await this.writeAudit({ ...auditBase, status: 'delete_started' });
+      } catch (auditError) {
+        const message = auditError instanceof Error ? auditError.message : String(auditError);
+        failed.push({ plan, error: `无法写入删除开始审计，未删除数据：${message}` });
+        continue;
+      }
+      try {
+        const sourceStat = await fs.lstat(plan.sourcePath);
+        if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) throw new Error('来源目录已变更，不会删除');
+        await fs.rm(plan.sourcePath, { recursive: true, force: false, maxRetries: 2, retryDelay: 250 });
+        deleted.push(plan);
+        try {
+          await this.writeAudit({ ...auditBase, timestamp: new Date().toISOString(), status: 'deleted' });
+        } catch (auditError) {
+          const message = auditError instanceof Error ? auditError.message : String(auditError);
+          auditErrors.push({ plan, error: message });
+          console.error('[Research Workbench] NMR delete audit failed', auditError);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failed.push({ plan, error: message });
+        try {
+          await this.writeAudit({ ...auditBase, timestamp: new Date().toISOString(), status: 'delete_failed', error: message });
+        } catch (auditError) { console.error('[Research Workbench] NMR delete failure audit failed', auditError); }
+      }
+    }
+    return { status: archiveBatchStatus(deleted.length, failed.length + auditErrors.length), deleted, failed, auditErrors, errors: [] };
   }
 
   async preflightArchive(relativePaths, batchRenameMap = {}) {
@@ -1529,6 +1631,137 @@ class NmrArchiveModal extends Modal {
 }
 
 module.exports = { NmrArchiveModal };
+
+},
+"./lib/nmr-delete-modal": function (module, exports, require) {
+const { Modal, Notice } = require('obsidian');
+
+class NmrDeleteModal extends Modal {
+  constructor(app, nmrInboxStore, relativePaths, options = {}) {
+    super(app);
+    this.nmrInboxStore = nmrInboxStore;
+    this.relativePaths = relativePaths;
+    this.options = options;
+    this.plans = [];
+    this.errors = [];
+    this.saving = false;
+    this.resultShown = false;
+    this.confirmed = false;
+  }
+
+  onOpen() {
+    this.modalEl.addClass('phdcc-task-modal');
+    this.contentEl.createEl('h2', { text: '确认永久删除核磁原始数据' });
+    this.contentEl.createDiv({
+      cls: 'phdcc-empty',
+      text: '此操作会永久删除待解目录中的整套原始采集文件夹（例如 fid、acqus、pdata），无法恢复；不会影响任何归档目录。'
+    });
+    this.body = this.contentEl.createDiv();
+    this.body.createDiv({ cls: 'phdcc-empty', text: '正在校验待删除的精确路径…' });
+
+    const confirmation = this.contentEl.createDiv({ cls: 'phdcc-archive-checks' });
+    this.confirmationInput = confirmation.createEl('input', { attr: { type: 'checkbox', 'aria-label': '确认永久删除' } });
+    confirmation.createSpan({ text: '我确认永久删除下列原始数据，且已不再需要它们。' });
+    this.confirmationInput.addEventListener('change', () => {
+      this.confirmed = this.confirmationInput.checked;
+      this.updateCta();
+    });
+
+    const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
+    const cancel = footer.createEl('button', { text: '取消', type: 'button' });
+    cancel.addEventListener('click', () => this.close());
+    this.ctaButton = footer.createEl('button', { text: '预检中…', cls: 'mod-warning', type: 'button' });
+    this.ctaButton.disabled = true;
+    this.ctaButton.addEventListener('click', () => { void this.submit(); });
+    void this.prepare();
+  }
+
+  async prepare() {
+    try {
+      const result = await this.nmrInboxStore.preflightDelete(this.relativePaths);
+      this.plans = result.plans;
+      this.errors = result.errors;
+    } catch (error) {
+      this.plans = [];
+      this.errors = [error instanceof Error ? error.message : '预检失败'];
+    }
+    this.renderPlan();
+    this.updateCta();
+  }
+
+  updateCta() {
+    if (!this.ctaButton || this.resultShown) return;
+    const canDelete = !this.errors.length && this.plans.length > 0 && this.confirmed && !this.saving;
+    this.ctaButton.disabled = !canDelete;
+    if (this.saving) this.ctaButton.setText('删除中…');
+    else if (this.errors.length) this.ctaButton.setText('存在阻塞项');
+    else if (!this.plans.length) this.ctaButton.setText('没有可删除项');
+    else if (!this.confirmed) this.ctaButton.setText('请先确认');
+    else this.ctaButton.setText(`永久删除 ${this.plans.length} 套`);
+  }
+
+  renderPlan() {
+    this.body.empty();
+    if (this.errors.length) {
+      this.body.createDiv({ cls: 'phdcc-empty', text: '以下项目不能删除；请取消后调整选择。' });
+      this.errors.forEach((error) => this.body.createDiv({ cls: 'phdcc-file-next', text: error }));
+    }
+    this.plans.forEach((plan) => {
+      const row = this.body.createDiv({ cls: 'phdcc-file-row' });
+      row.createDiv({ cls: 'phdcc-file-title', text: `${plan.nucleus || '待核对'} · ${plan.relativeScanPath}` });
+      row.createDiv({ cls: 'phdcc-archive-label', text: '将永久删除' });
+      row.createDiv({ cls: 'phdcc-archive-path', text: plan.sourcePath });
+      row.createDiv({ cls: 'phdcc-file-next', text: `${plan.fileCount} 个文件 · ${plan.directoryCount} 个子目录 · ${formatBytes(plan.totalBytes)}` });
+    });
+  }
+
+  async submit() {
+    if (this.resultShown) return void this.close();
+    if (this.saving || this.errors.length || !this.plans.length || !this.confirmed) return;
+    this.saving = true;
+    this.confirmationInput.disabled = true;
+    this.updateCta();
+    try {
+      const result = await this.nmrInboxStore.deleteSelected(this.plans.map((plan) => plan.relativeScanPath));
+      if (typeof this.options.onDeleted === 'function') await this.options.onDeleted(result);
+      if (result.status === 'completed') {
+        this.close();
+        new Notice(`已永久删除 ${result.deleted.length} 套待解核磁原始数据`);
+        return;
+      }
+      this.saving = false;
+      this.resultShown = true;
+      this.body.empty();
+      this.body.createDiv({ cls: 'phdcc-empty', text: `删除结果：${result.status === 'partial_failure' ? '部分成功' : '全部失败'}` });
+      this.body.createDiv({ cls: 'phdcc-file-next', text: `已删除 ${result.deleted.length} · 失败 ${result.failed.length} · 审计异常 ${result.auditErrors?.length || 0}` });
+      result.failed.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：${item.error}` }));
+      result.auditErrors?.forEach((item) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${item.plan?.relativeScanPath || ''}：数据已删除，但最终审计写入失败：${item.error}` }));
+      this.ctaButton.disabled = false;
+      this.ctaButton.setText('关闭结果');
+      this.ctaButton.onclick = () => this.close();
+      new Notice(`核磁删除完成：已删除 ${result.deleted.length}，失败 ${result.failed.length}`);
+    } catch (error) {
+      this.saving = false;
+      this.confirmationInput.disabled = false;
+      this.updateCta();
+      new Notice(error instanceof Error ? error.message : '核磁删除失败');
+    }
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+function formatBytes(value) {
+  const bytes = Number(value) || 0;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+module.exports = { NmrDeleteModal };
 
 },
 "./lib/modal": function (module, exports, require) {
@@ -2149,6 +2382,7 @@ const { TaskModal } = require('./lib/modal');
 const { ExperimentModal } = require('./lib/experiment-modal');
 const { NmrInboxStore } = require('./lib/nmr');
 const { NmrArchiveModal } = require('./lib/nmr-archive-modal');
+const { NmrDeleteModal } = require('./lib/nmr-delete-modal');
 const { QuickCreateModal } = require('./lib/quick-create-modal');
 const { ResearchDatabase } = require('./lib/database');
 const { EntityStore } = require('./lib/entities/store');
@@ -2477,6 +2711,17 @@ class WorkbenchView extends ItemView {
     new NmrArchiveModal(this.app, this.nmrInboxStore, selected, {
       entityStore: this.entityStore,
       onArchived: async (result) => {
+        this.selectedNmrPaths.clear();
+        if (result?.status === 'completed' || result?.status === 'partial_failure') await this.refreshNmrInbox();
+      }
+    }).open();
+  }
+
+  openNmrDeleteModal() {
+    const selected = [...this.selectedNmrPaths];
+    if (!selected.length) return void new Notice('请先勾选要删除的核磁原始数据');
+    new NmrDeleteModal(this.app, this.nmrInboxStore, selected, {
+      onDeleted: async (result) => {
         this.selectedNmrPaths.clear();
         if (result?.status === 'completed' || result?.status === 'partial_failure') await this.refreshNmrInbox();
       }
@@ -2844,11 +3089,18 @@ class WorkbenchView extends ItemView {
   }
 
   _renderNmrInboxPage() {
-    this.renderPageHeader('待解核磁', '勾选后预检；确认前不会移动任何原始数据', {
+    this.renderPageHeader('待解核磁', '归档与删除均会先预检，并在确认前不改动原始数据', {
       label: `归档已选 (${this.selectedNmrPaths.size})`,
       disabled: this.selectedNmrPaths.size === 0,
       onClick: () => this.openNmrArchiveModal()
     });
+    const remove = this.pageEl.createEl('button', {
+      cls: 'phdcc-page-add phdcc-calendar-add phdcc-nmr-delete',
+      text: `删除已选（永久） (${this.selectedNmrPaths.size})`,
+      attr: { type: 'button', title: '永久删除所选待解核磁原始数据' }
+    });
+    remove.disabled = this.selectedNmrPaths.size === 0;
+    remove.addEventListener('click', () => this.openNmrDeleteModal());
     const refresh = this.pageEl.createEl('button', {
       cls: 'phdcc-page-add phdcc-calendar-add phdcc-nmr-refresh',
       text: '↻ 刷新核磁列表',

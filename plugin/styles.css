@@ -691,6 +691,15 @@
   border-color: var(--phdcc-border-strong);
 }
 
+.phdcc-view .phdcc-nmr-delete {
+  border-color: var(--text-error);
+  color: var(--text-error);
+}
+
+.phdcc-view .phdcc-nmr-delete:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-error) 12%, transparent);
+}
+
 .phdcc-view .phdcc-archive-transfer { margin: 8px 0; padding: 8px 10px; background: var(--phdcc-soft); border-radius: 8px; }
 .phdcc-view .phdcc-archive-label { color: var(--phdcc-faint); font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .phdcc-view .phdcc-archive-path { color: var(--phdcc-text); font-family: var(--font-monospace); font-size: 11px; overflow-wrap: anywhere; }

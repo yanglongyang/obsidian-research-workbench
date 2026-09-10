@@ -315,6 +315,40 @@ test('NMR archive writes started and success audit entries', async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+test('NMR delete removes only the selected inbox scan and writes an audit trail', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-delete-'));
+  const inbox = path.join(root, 'inbox');
+  await fs.mkdir(inbox, { recursive: true });
+  const selected = await makeScan(inbox, 'batch\\10', '1H', true);
+  const sibling = await makeScan(inbox, 'batch\\11', '13C', true);
+  const vault = auditVault();
+  const store = new nmr.NmrInboxStore(pluginFor(inbox, '', vault));
+  const result = await store.deleteSelected(['batch\\10']);
+  assert.strictEqual(result.status, 'completed');
+  assert.strictEqual(result.deleted.length, 1);
+  assert.strictEqual(await fs.access(selected).then(() => true).catch(() => false), false);
+  assert.strictEqual(await fs.access(sibling).then(() => true), true);
+  const audit = vault.files.get('00-博士工作台/应用数据/审计/nmr-archive.jsonl').content;
+  assert.match(audit, /"operation":"delete"/);
+  assert.match(audit, /"status":"delete_started"/);
+  assert.match(audit, /"status":"deleted"/);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test('NMR delete refuses unlisted paths and blocks deletion when initial audit fails', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-delete-safe-'));
+  const inbox = path.join(root, 'inbox');
+  await fs.mkdir(inbox, { recursive: true });
+  const source = await makeScan(inbox, 'blocked', '1H', true);
+  const store = new nmr.NmrInboxStore(pluginFor(inbox, '', auditVault({ fail: true })));
+  const missing = await store.preflightDelete(['..\\outside']);
+  assert.ok(missing.errors.some((error) => /不在待解核磁目录/.test(error)));
+  const result = await store.deleteSelected(['blocked']);
+  assert.strictEqual(result.status, 'failed');
+  assert.strictEqual(await fs.access(source).then(() => true), true);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
 test('NMR archive creates DataAsset with relations and records DATA id', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-asset-'));
   const inbox = path.join(root, 'inbox'); const archive = path.join(root, 'archive');

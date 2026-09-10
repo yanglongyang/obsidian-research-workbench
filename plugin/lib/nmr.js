@@ -190,12 +190,114 @@ class NmrInboxStore {
   async listPendingScans() {
     const configurationError = this.getConfigurationError();
     if (configurationError) throw new Error(configurationError);
+    return this.listInboxScans();
+  }
+
+  async listInboxScans() {
+    if (!this.inboxFolder) throw new Error('尚未配置 NMR 待处理目录，请前往 设置 → 科研工作台设置。');
     const root = resolveNmrPath(this.inboxFolder);
     const rootStat = await fs.stat(root);
     if (!rootStat.isDirectory()) throw new Error('待解核磁目录不可用');
     const results = [];
     await scanDirectory(root, root, results);
     return results.sort((a, b) => String(b.modified).localeCompare(String(a.modified)) || a.relativeScanPath.localeCompare(b.relativeScanPath));
+  }
+
+  async preflightDelete(relativePaths) {
+    const requested = [...new Set((Array.isArray(relativePaths) ? relativePaths : []).filter((value) => typeof value === 'string' && value))];
+    if (!requested.length) return { plans: [], errors: ['请至少勾选一套待解核磁。'] };
+
+    const inboxRoot = resolveNmrPath(this.inboxFolder);
+    let scans;
+    try {
+      scans = await this.listInboxScans();
+    } catch (error) {
+      return { plans: [], errors: [error instanceof Error ? error.message : '无法读取待解核磁目录'] };
+    }
+    const byPath = new Map(scans.map((scan) => [scan.relativeScanPath, scan]));
+    const plans = [];
+    const errors = [];
+    for (const relativePath of requested) {
+      const scan = byPath.get(relativePath);
+      if (!scan) {
+        errors.push(`${relativePath}：不在待解核磁目录中，可能已被移动或删除。`);
+        continue;
+      }
+      const sourcePath = path.win32.resolve(inboxRoot, scan.relativeScanPath);
+      if (!insideRoot(sourcePath, inboxRoot) || sourcePath.toLowerCase() === inboxRoot.toLowerCase()) {
+        errors.push(`${relativePath}：来源路径不安全。`);
+        continue;
+      }
+      try {
+        const sourceStat = await fs.lstat(sourcePath);
+        if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) throw new Error('不是可安全删除的原始数据目录');
+      } catch (error) {
+        errors.push(`${relativePath}：${error instanceof Error ? error.message : '来源目录不可用'}`);
+        continue;
+      }
+      const nestedScan = scans.find((other) => other.relativeScanPath !== scan.relativeScanPath && insideRoot(other.scanFolder, sourcePath));
+      if (nestedScan) {
+        errors.push(`${relativePath}：目录中包含另一套采集数据 ${nestedScan.relativeScanPath}，拒绝删除。`);
+        continue;
+      }
+      plans.push({ ...scan, sourcePath });
+    }
+    return { plans, errors };
+  }
+
+  async deleteSelected(relativePaths) {
+    const { plans, errors } = await this.preflightDelete(relativePaths);
+    if (errors.length) return { status: 'failed', deleted: [], failed: errors.map((error) => ({ error })), auditErrors: [], errors };
+
+    const inboxRoot = resolveNmrPath(this.inboxFolder);
+    const deleted = [];
+    const failed = [];
+    const auditErrors = [];
+    for (const plan of plans) {
+      if (!insideRoot(plan.sourcePath, inboxRoot) || plan.sourcePath.toLowerCase() === inboxRoot.toLowerCase()) {
+        failed.push({ plan, error: '删除路径校验失败' });
+        continue;
+      }
+      const operationId = `NMRDEL-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      const auditBase = {
+        delete_id: operationId,
+        operation: 'delete',
+        timestamp: new Date().toISOString(),
+        source: plan.sourcePath,
+        relative_path: plan.relativeScanPath,
+        nucleus: plan.nucleus,
+        file_count: plan.fileCount,
+        directory_count: plan.directoryCount,
+        total_bytes: plan.totalBytes
+      };
+      try {
+        await this.writeAudit({ ...auditBase, status: 'delete_started' });
+      } catch (auditError) {
+        const message = auditError instanceof Error ? auditError.message : String(auditError);
+        failed.push({ plan, error: `无法写入删除开始审计，未删除数据：${message}` });
+        continue;
+      }
+      try {
+        const sourceStat = await fs.lstat(plan.sourcePath);
+        if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) throw new Error('来源目录已变更，不会删除');
+        await fs.rm(plan.sourcePath, { recursive: true, force: false, maxRetries: 2, retryDelay: 250 });
+        deleted.push(plan);
+        try {
+          await this.writeAudit({ ...auditBase, timestamp: new Date().toISOString(), status: 'deleted' });
+        } catch (auditError) {
+          const message = auditError instanceof Error ? auditError.message : String(auditError);
+          auditErrors.push({ plan, error: message });
+          console.error('[Research Workbench] NMR delete audit failed', auditError);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failed.push({ plan, error: message });
+        try {
+          await this.writeAudit({ ...auditBase, timestamp: new Date().toISOString(), status: 'delete_failed', error: message });
+        } catch (auditError) { console.error('[Research Workbench] NMR delete failure audit failed', auditError); }
+      }
+    }
+    return { status: archiveBatchStatus(deleted.length, failed.length + auditErrors.length), deleted, failed, auditErrors, errors: [] };
   }
 
   async preflightArchive(relativePaths, batchRenameMap = {}) {

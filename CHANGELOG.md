@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- 待解核磁页面新增“删除已选（永久）”。删除前展示精确来源路径并要求二次勾选确认；操作只允许待解目录内的原始采集文件夹，并写入删除审计。
+
 ## 0.4.1 — Entity Layer Final Closure
 
 ### Fixed

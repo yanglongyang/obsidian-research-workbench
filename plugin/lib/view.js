@@ -15,6 +15,7 @@ const { TaskModal } = require('./modal');
 const { ExperimentModal } = require('./experiment-modal');
 const { NmrInboxStore } = require('./nmr');
 const { NmrArchiveModal } = require('./nmr-archive-modal');
+const { NmrDeleteModal } = require('./nmr-delete-modal');
 const { QuickCreateModal } = require('./quick-create-modal');
 const { ResearchDatabase } = require('./database');
 const { EntityStore } = require('./entities/store');
@@ -343,6 +344,17 @@ class WorkbenchView extends ItemView {
     new NmrArchiveModal(this.app, this.nmrInboxStore, selected, {
       entityStore: this.entityStore,
       onArchived: async (result) => {
+        this.selectedNmrPaths.clear();
+        if (result?.status === 'completed' || result?.status === 'partial_failure') await this.refreshNmrInbox();
+      }
+    }).open();
+  }
+
+  openNmrDeleteModal() {
+    const selected = [...this.selectedNmrPaths];
+    if (!selected.length) return void new Notice('请先勾选要删除的核磁原始数据');
+    new NmrDeleteModal(this.app, this.nmrInboxStore, selected, {
+      onDeleted: async (result) => {
         this.selectedNmrPaths.clear();
         if (result?.status === 'completed' || result?.status === 'partial_failure') await this.refreshNmrInbox();
       }
@@ -710,11 +722,18 @@ class WorkbenchView extends ItemView {
   }
 
   _renderNmrInboxPage() {
-    this.renderPageHeader('待解核磁', '勾选后预检；确认前不会移动任何原始数据', {
+    this.renderPageHeader('待解核磁', '归档与删除均会先预检，并在确认前不改动原始数据', {
       label: `归档已选 (${this.selectedNmrPaths.size})`,
       disabled: this.selectedNmrPaths.size === 0,
       onClick: () => this.openNmrArchiveModal()
     });
+    const remove = this.pageEl.createEl('button', {
+      cls: 'phdcc-page-add phdcc-calendar-add phdcc-nmr-delete',
+      text: `删除已选（永久） (${this.selectedNmrPaths.size})`,
+      attr: { type: 'button', title: '永久删除所选待解核磁原始数据' }
+    });
+    remove.disabled = this.selectedNmrPaths.size === 0;
+    remove.addEventListener('click', () => this.openNmrDeleteModal());
     const refresh = this.pageEl.createEl('button', {
       cls: 'phdcc-page-add phdcc-calendar-add phdcc-nmr-refresh',
       text: '↻ 刷新核磁列表',
