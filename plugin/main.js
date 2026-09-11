@@ -2808,6 +2808,7 @@ class WorkbenchView extends ItemView {
     this.selectedNmrPaths = new Set();
     this.workQueue = [];
     this.workQueueErrors = {};
+    this.activeWorkQueueSource = 'spectra';
     this.root = null;
     this.pageEl = null;
     this.searchInput = null;
@@ -3479,11 +3480,20 @@ class WorkbenchView extends ItemView {
     });
     const stats = this.pageEl.createDiv({ cls: 'phdcc-stats' });
     this.workQueue.forEach((queue) => {
-      const card = stats.createDiv({ cls: 'phdcc-stat-card' });
+      const active = queue.source.id === this.activeWorkQueueSource;
+      const card = stats.createEl('button', {
+        cls: `phdcc-stat-card phdcc-queue-tab${active ? ' is-active' : ''}`,
+        attr: { type: 'button', 'aria-pressed': active ? 'true' : 'false', title: `显示${queue.source.label}` }
+      });
       card.createDiv({ cls: 'phdcc-stat-label', text: queue.source.label });
       card.createDiv({ cls: 'phdcc-stat-value', text: String(queue.entries.length) });
+      card.addEventListener('click', () => {
+        this.activeWorkQueueSource = queue.source.id;
+        this.renderPage();
+      });
     });
-    this.workQueue.forEach((queue) => this.renderWorkQueueSource(queue));
+    const activeQueue = this.workQueue.find((queue) => queue.source.id === this.activeWorkQueueSource) || this.workQueue[0];
+    if (activeQueue) this.renderWorkQueueSource(activeQueue);
   }
 
   renderWorkQueueSource(queue) {
