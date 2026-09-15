@@ -1,6 +1,6 @@
 # Obsidian 科研工作台 / Research Workbench
 
-一个本地优先的 Obsidian 科研信息系统，当前版本为 `v0.4.1` Research Entity Layer Final Closure。
+一个本地优先的 Obsidian 科研信息系统，当前版本为 `v0.5.1` Project Relations Closure。
 
 ## 架构原则
 

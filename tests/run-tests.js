@@ -153,9 +153,15 @@ test('schema v3 and duplicate target precedence remain explicit', () => {
 
 test('EntityStore selectors exclude legacy and wrong-prefix records', () => {
   const files = [{ path: '00-博士工作台/02-课题/a.md', basename: 'a' }, { path: '00-博士工作台/02-课题/b.md', basename: 'b' }];
-  const metadata = new Map([[files[0], { kind: 'project', record_id: 'PROJ-1', title: 'A' }], [files[1], { kind: 'project', record_id: 'LEGACY-PROJECT-X', title: 'B' }]]);
+  const metadata = new Map([[files[0], { kind: 'project', record_id: 'PROJ-1', title: 'A', sample: 'S-1' }], [files[1], { kind: 'project', record_id: 'LEGACY-PROJECT-X', title: 'B' }]]);
   const plugin = { app: { vault: { getMarkdownFiles: () => files }, metadataCache: { getFileCache: (file) => ({ frontmatter: metadata.get(file) }) } } };
   assert.deepStrictEqual(new EntityStore(plugin).listProjects().map((item) => item.id), ['PROJ-1']);
+});
+
+test('EntityStore preserves experiment sample metadata', () => {
+  const file = { path: '00-博士工作台/03-实验/e.md', basename: 'e' };
+  const plugin = { app: { vault: { getMarkdownFiles: () => [file] }, metadataCache: { getFileCache: () => ({ frontmatter: { kind: 'experiment', record_id: 'EXP-1', sample: 'YLY-145' } }) } } };
+  assert.strictEqual(new EntityStore(plugin).list('experiment')[0].sample, 'YLY-145');
 });
 
 test('relationship conflicts are reported only when both sides are explicit', () => {
@@ -200,6 +206,18 @@ test('experiment relation writes are TOCTOU checked and read-back verified', asy
   assert.strictEqual(skipped.status, 'skipped');
 });
 
+test('relation apply re-reads target project and fails closed after deletion or rename', async () => {
+  const file = { path: '00-博士工作台/03-实验/e.md' }; const frontmatter = { kind: 'experiment', record_id: 'EXP-1', project_id: '', project: '' };
+  const app = { metadataCache: { getFileCache: () => ({ frontmatter }) }, fileManager: { async processFrontMatter(target, callback) { callback(frontmatter); } } };
+  let target = { id: 'PROJ-A', title: '新标题', file: { path: '00-博士工作台/02-课题/a.md' } };
+  const entityStore = { getById: () => target };
+  const result = await updateExperimentProject(app, file, { id: 'PROJ-A', title: '旧标题' }, { expectedId: 'EXP-1', expectedProjectId: '', entityStore });
+  assert.strictEqual(result.status, 'success'); assert.strictEqual(frontmatter.project, '新标题');
+  target = null;
+  const failed = await updateExperimentProject(app, file, { id: 'PROJ-A', title: '旧标题' }, { expectedId: 'EXP-1', expectedProjectId: 'PROJ-A', entityStore });
+  assert.strictEqual(failed.status, 'failed');
+});
+
 test('batch project relation reports partial failures and legacy upgrade keeps order', async () => {
   const files = [{ path: 'e1.md' }, { path: 'e2.md' }]; const data = new Map(files.map((file) => [file, { kind: 'experiment', record_id: file === files[0] ? 'EXP-1' : 'BAD-2', project_id: '', project: '' }]));
   const app = { metadataCache: { getFileCache: (file) => ({ frontmatter: data.get(file) }) }, fileManager: { async processFrontMatter(file, callback) { if (!data.has(file)) throw new Error('missing'); callback(data.get(file)); } } };
@@ -207,6 +225,8 @@ test('batch project relation reports partial failures and legacy upgrade keeps o
   assert.strictEqual(result.status, 'partial_failure'); assert.strictEqual(result.success.length, 1); assert.strictEqual(result.failed.length, 1);
   const legacy = { path: 'legacy.md' }; const legacyFm = { kind: 'experiment', title: 'Legacy', record_id: '' }; data.set(legacy, legacyFm);
   const upgraded = await upgradeLegacyExperimentAndAssign(app, legacy, project); assert.strictEqual(upgraded.status, 'success'); assert.match(legacyFm.record_id, /^EXP-/); assert.strictEqual(legacyFm.project_id, 'PROJ-A');
+  const invalid = { path: 'invalid.md' }; const invalidFm = { kind: 'experiment', record_id: 'PROJ-ABC' }; data.set(invalid, invalidFm);
+  const rejected = await upgradeLegacyExperimentAndAssign(app, invalid, project); assert.strictEqual(rejected.status, 'failed'); assert.match(rejected.error, /前缀无效/);
 });
 
 function entityApp() {

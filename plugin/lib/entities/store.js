@@ -34,6 +34,7 @@ class EntityStore {
       stage: text(frontmatter.stage),
       nextAction: text(frontmatter.next_action || frontmatter.nextAction),
       keyResult: text(frontmatter.key_result),
+      sample: text(frontmatter.sample),
       date: text(frontmatter.experiment_date || frontmatter.date || frontmatter.acquired_at),
       dataPath: text(frontmatter.data_path)
     })).sort((a, b) => a.title.localeCompare(b.title));

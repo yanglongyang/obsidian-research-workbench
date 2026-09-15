@@ -328,9 +328,9 @@ class WorkbenchView extends ItemView {
     modal.onClose = () => modal.contentEl.empty();
     modal.open();
   }
-  async assignExperiment(item, project) { const result = await updateExperimentProject(this.app, item.file, project, { expectedId: item.id, expectedProjectId: item.projectId || '' }); if (result.status === 'success') await this.researchDatabase.refresh(); return result; }
-  async assignExperimentBatch(items, project) { const result = await batchAssignExperiments(this.app, items, project); await this.researchDatabase.refresh(); return result; }
-  async upgradeLegacyExperiment(item, project) { const result = await upgradeLegacyExperimentAndAssign(this.app, item.file, project); await this.researchDatabase.refresh(); return result; }
+  async assignExperiment(item, project) { const result = await updateExperimentProject(this.app, item.file, project, { expectedId: item.id, expectedProjectId: item.projectId || '', entityStore: this.entityStore }); if (result.status === 'success') await this.researchDatabase.refresh(); return result; }
+  async assignExperimentBatch(items, project) { const result = await batchAssignExperiments(this.app, items, project, { entityStore: this.entityStore }); await this.researchDatabase.refresh(); return result; }
+  async upgradeLegacyExperiment(item, project) { const result = await upgradeLegacyExperimentAndAssign(this.app, item.file, project, { entityStore: this.entityStore }); await this.researchDatabase.refresh(); return result; }
   openCompoundModal() { new CompoundModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openDataAssetModal() { new DataAssetModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openMigrationModal() { new MigrationModal(this.app, this.plugin, { onCompleted: async () => { await this.refresh(); } }).open(); }
@@ -645,7 +645,7 @@ class WorkbenchView extends ItemView {
   }
 
   _renderExperimentPage() {
-    this.renderPageHeader('实验记录', '新建记录存入工作台；旧记录保持只读', {
+    this.renderPageHeader('实验记录', '新建记录存入工作台；永久实验可快速修改课题归属', {
       label: '+ 新增实验记录',
       onClick: () => this.openExperimentModal()
     });
@@ -676,6 +676,10 @@ class WorkbenchView extends ItemView {
     const side = row.createDiv({ cls: 'phdcc-experiment-side' });
     createBadge(side, EXPERIMENT_STATUS_LABEL[info.status] || '未设置', badgeTone(info.status));
     if (info.recordId) side.createDiv({ cls: 'phdcc-record-id', text: info.recordId });
+    if (info.recordId && info.recordId.startsWith('EXP-')) {
+      const relation = side.createEl('button', { cls: 'phdcc-row-action', text: '修改归属', attr: { type: 'button' } });
+      relation.addEventListener('click', () => this.openProjectRelationModal({ file, id: info.recordId, title: info.title, projectId: info.projectId, project: info.project }));
+    }
     const action = side.createEl('button', { cls: 'phdcc-row-action', text: '打开', attr: { type: 'button', title: info.path } });
     action.addEventListener('click', () => { void this.openFile(file); });
   }

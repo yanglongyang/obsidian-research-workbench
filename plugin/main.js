@@ -1083,6 +1083,7 @@ class EntityStore {
       stage: text(frontmatter.stage),
       nextAction: text(frontmatter.next_action || frontmatter.nextAction),
       keyResult: text(frontmatter.key_result),
+      sample: text(frontmatter.sample),
       date: text(frontmatter.experiment_date || frontmatter.date || frontmatter.acquired_at),
       dataPath: text(frontmatter.data_path)
     })).sort((a, b) => a.title.localeCompare(b.title));
@@ -1152,8 +1153,14 @@ async function updateExperimentProject(app, file, project, options = {}) {
   if (!validateEntityRecord({ id: current.record_id, type: 'experiment', path: file.path }).entityIdValid) return { status: 'failed', error: '实验不是合法的永久 EXP ID' };
   if (expectedId && String(current.record_id || '').trim() !== expectedId) return { status: 'skipped', reason: 'record_id changed since preview' };
   if (expectedProjectId !== null && String(current.project_id || '').trim() !== expectedProjectId) return { status: 'skipped', reason: 'relation changed since preview' };
-  const projectId = String(project?.id || '').trim(); const projectTitle = String(project?.title || '').trim();
-  if (projectId && (!validateEntityRecord({ id: projectId, type: 'project', path: project.file?.path }).entityIdValid || !projectTitle)) return { status: 'failed', error: '目标课题无效' };
+  const projectId = String(project?.id || '').trim();
+  let freshProject = project;
+  if (projectId && options.entityStore) {
+    freshProject = options.entityStore.getById(projectId, 'project');
+    if (!freshProject) return { status: 'failed', error: '目标课题已不存在或类型已变化' };
+  }
+  const projectTitle = String(freshProject?.title || '').trim();
+  if (projectId && (!validateEntityRecord({ id: projectId, type: 'project', path: freshProject?.file?.path }).entityIdValid || !projectTitle)) return { status: 'failed', error: '目标课题无效' };
   try {
     await app.fileManager.processFrontMatter(file, (data) => {
       if (data.kind !== 'experiment' || String(data.record_id || '').trim() !== String(current.record_id || '').trim()) throw new Error('实验在写入前发生变化');
@@ -1174,7 +1181,7 @@ async function updateExperimentProject(app, file, project, options = {}) {
 async function batchAssignExperiments(app, items, project, options = {}) {
   const results = { status: 'completed', success: [], skipped: [], failed: [] };
   for (const item of items || []) {
-    const result = await updateExperimentProject(app, item.file, project, { expectedId: item.id, expectedProjectId: item.projectId || '' });
+    const result = await updateExperimentProject(app, item.file, project, { expectedId: item.id, expectedProjectId: item.projectId || '', entityStore: options.entityStore });
     if (result.status === 'success') results.success.push({ item, result });
     else if (result.status === 'skipped') results.skipped.push({ item, reason: result.reason || result.error });
     else results.failed.push({ item, error: result.error });
@@ -1183,16 +1190,20 @@ async function batchAssignExperiments(app, items, project, options = {}) {
   return results;
 }
 
-async function upgradeLegacyExperimentAndAssign(app, file, project) {
+async function upgradeLegacyExperimentAndAssign(app, file, project, options = {}) {
   const current = frontmatterOf(app, file);
   if (!current || current.kind !== 'experiment') return { status: 'failed', error: '实验文件不存在或类型不正确' };
-  if (validateEntityRecord({ id: current.record_id, type: 'experiment', path: file.path }).entityIdValid) return { status: 'failed', error: '该实验已经是永久 ID' };
+  const rawId = String(current.record_id || '').trim();
+  if (validateEntityRecord({ id: rawId, type: 'experiment', path: file.path }).entityIdValid) return { status: 'failed', error: '该实验已经是永久 ID' };
+  if (rawId && !rawId.startsWith('LEGACY-')) return { status: 'failed', error: '该实验的 record_id 前缀无效，请先在关系检查中修复' };
+  const targetId = String(project?.id || '').trim();
+  if (targetId && options.entityStore && !options.entityStore.getById(targetId, 'project')) return { status: 'failed', error: '目标课题已不存在或类型已变化' };
   const permanentId = generateRecordId('EXP');
   try {
     await app.fileManager.processFrontMatter(file, (data) => { if (data.kind !== 'experiment' || String(data.record_id || '').trim() !== String(current.record_id || '').trim()) throw new Error('实验在升级前发生变化'); data.record_id = permanentId; data.updated = new Date().toISOString(); });
     const upgraded = frontmatterOf(app, file);
     if (!upgraded || String(upgraded.record_id || '').trim() !== permanentId) return { status: 'failed', error: 'EXP ID 写入后回读失败' };
-    const relation = await updateExperimentProject(app, file, project, { expectedId: permanentId, expectedProjectId: String(upgraded.project_id || '').trim() });
+    const relation = await updateExperimentProject(app, file, project, { expectedId: permanentId, expectedProjectId: String(upgraded.project_id || '').trim(), entityStore: options.entityStore });
     if (relation.status !== 'success') return { status: relation.status, error: relation.error || relation.reason, permanentId };
     return { status: 'success', permanentId };
   } catch (error) { return { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
@@ -1202,7 +1213,7 @@ module.exports = { permanentExperiments, projectRelations, unassignedExperiments
 
 },
 "./lib/ui/project-hub": function (module, exports, require) {
-const { projectRelations, suggestProjectForExperiment, updateExperimentProject } = require('./lib/entities/project-relations');
+const { projectRelations, suggestProjectForExperiment } = require('./lib/entities/project-relations');
 
 const STATUS_LABELS = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻' };
 function dateOf(item) { return String(item.experimentDate || item.date || item.updated || item.file?.stat?.mtime || '').slice(0, 10); }
@@ -1233,11 +1244,11 @@ function renderProjectHub(view, project) {
   const experiments = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' }); experiments.createEl('h3', { text: '实验' });
   ['全部', 'doing', 'complete', 'blocked'].forEach((status) => { const chip = experiments.createEl('button', { cls: 'phdcc-filter-chip', text: status === '全部' ? '全部' : STATUS_LABELS[status], attr: { type: 'button' } }); chip.addEventListener('click', () => { experiments.querySelectorAll('.phdcc-experiment-row').forEach((row) => { row.style.display = status === '全部' || row.dataset.status === status ? '' : 'none'; }); }); });
   sortRecent(relation.experiments).forEach((item) => renderExperimentItem(view, experiments, item, project));
-  const compounds = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' }); compounds.createEl('h3', { text: '化合物' }); relation.compounds.forEach((item) => { const row = compounds.createDiv({ cls: 'phdcc-file-row' }); row.createDiv({ cls: 'phdcc-file-title', text: `${item.compoundCode || item.title} · ${item.title}` }); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.id} · 关联实验 ${relation.experiments.filter((exp) => exp.compoundId === item.id).length} 个 · 关联数据 ${relation.dataAssets.filter((asset) => asset.compoundId === item.id).length} 个` }); });
-  const assets = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' }); assets.createEl('h3', { text: '数据资产' }); relation.dataAssets.forEach((item) => { const row = assets.createDiv({ cls: 'phdcc-file-row' }); row.createDiv({ cls: 'phdcc-file-title', text: `${item.assetType || '数据'} · ${item.title}` }); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.id} · ${item.dataPath || '无路径'}${item.experimentId ? ` · ${item.experimentId}` : ''}${item.compoundId ? ` · ${item.compoundId}` : ''}` }); });
+  const compounds = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' }); compounds.createEl('h3', { text: '化合物' }); relation.compounds.forEach((item) => { const row = compounds.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: `${item.compoundCode || item.title} · ${item.title}` }); if (item.file) title.addEventListener('click', () => void view.openFile(item.file)); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.id} · 关联实验 ${relation.experiments.filter((exp) => exp.compoundId === item.id).length} 个 · 关联数据 ${relation.dataAssets.filter((asset) => asset.compoundId === item.id).length} 个` }); });
+  const assets = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' }); assets.createEl('h3', { text: '数据资产' }); relation.dataAssets.forEach((item) => { const row = assets.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: `${item.assetType || '数据'} · ${item.title}` }); if (item.file) title.addEventListener('click', () => void view.openFile(item.file)); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.id} · ${item.dataPath || '无路径'}${item.experimentId ? ` · ${item.experimentId}` : ''}${item.compoundId ? ` · ${item.compoundId}` : ''}` }); });
   const timeline = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' }); timeline.createEl('h3', { text: 'Project Timeline' });
-  const events = [...relation.experiments.map((item) => ({ date: dateOf(item), id: item.id, title: item.title, status: item.status })), ...relation.dataAssets.map((item) => ({ date: dateOf(item), id: item.id, title: item.title, status: item.assetType || '数据资产' })), ...relation.tasks.map((item) => ({ date: item.date || item.updated, id: item.id, title: item.title, status: item.status }))].sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  events.forEach((event) => { const row = timeline.createDiv({ cls: 'phdcc-file-row' }); row.createDiv({ cls: 'phdcc-file-meta', text: `${event.date || '无日期'} · ${event.id}` }); row.createDiv({ cls: 'phdcc-file-title', text: event.title }); row.createDiv({ cls: 'phdcc-file-next', text: event.status || '' }); });
+  const events = [...relation.experiments.map((item) => ({ file: item.file, date: dateOf(item), id: item.id, title: item.title, status: item.status })), ...relation.dataAssets.map((item) => ({ file: item.file, date: dateOf(item), id: item.id, title: item.title, status: item.assetType || '数据资产' })), ...relation.tasks.map((item) => ({ file: item.file, date: item.date || item.updated, id: item.id, title: item.title, status: item.status }))].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  events.forEach((event) => { const row = timeline.createDiv({ cls: 'phdcc-file-row' }); row.createDiv({ cls: 'phdcc-file-meta', text: `${event.date || '无日期'} · ${event.id}` }); const title = row.createDiv({ cls: 'phdcc-file-title', text: event.title }); if (event.file) title.addEventListener('click', () => void view.openFile(event.file)); row.createDiv({ cls: 'phdcc-file-next', text: event.status || '' }); });
   if (!events.length) timeline.createDiv({ cls: 'phdcc-empty', text: '暂无时间线记录' });
 }
 
@@ -1254,13 +1265,15 @@ module.exports = { renderProjectHub, suggestProjectForExperiment };
 },
 "./lib/ui/unassigned-experiments": function (module, exports, require) {
 const { Notice } = require('obsidian');
-const { unassignedExperiments } = require('./lib/entities/project-relations');
+const { unassignedExperiments, suggestProjectForExperiment } = require('./lib/entities/project-relations');
 const { validateEntityRecord } = require('./lib/entities/identity');
 
 function renderUnassignedExperiments(view) {
   view.renderPageHeader('未归属实验', '只显示拥有合法 EXP-* 且 project_id 为空的实验', {});
   const items = unassignedExperiments(view.entityStore).filter((item) => !view.searchQuery || `${item.title} ${item.id} ${item.sample}`.toLowerCase().includes(view.searchQuery.toLowerCase()));
-  const legacy = view.entityStore.list('experiment').filter((item) => !validateEntityRecord(item).entityIdValid);
+  const allExperiments = view.entityStore.list('experiment');
+  const legacy = allExperiments.filter((item) => { const rawId = String(item.id || '').trim(); return !rawId || rawId.startsWith('LEGACY-'); });
+  const invalid = allExperiments.filter((item) => { const rawId = String(item.id || '').trim(); return rawId && !rawId.startsWith('LEGACY-') && !validateEntityRecord(item).entityIdValid; });
   const card = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
   card.createEl('h3', { text: `未归属实验：${items.length} 条` });
   if (!items.length) card.createDiv({ cls: 'phdcc-empty', text: '没有待整理的永久实验记录。' });
@@ -1269,8 +1282,9 @@ function renderUnassignedExperiments(view) {
   const checkAll = card.createEl('button', { cls: 'phdcc-filter-chip', text: '全选当前列表', attr: { type: 'button' } }); checkAll.addEventListener('click', () => { items.forEach((item) => selected.add(item.id)); card.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = true; }); });
   const target = card.createEl('select', { cls: 'phdcc-relation-select', attr: { 'aria-label': '批量目标课题' } }); target.createEl('option', { text: '选择批量目标课题', value: '' }); projects.forEach((project) => target.createEl('option', { text: `${project.title} · ${project.id}`, value: project.id }));
   const batch = card.createEl('button', { cls: 'phdcc-page-add', text: '批量关联', attr: { type: 'button' } }); batch.addEventListener('click', async () => { const chosen = projects.find((project) => project.id === target.value); const selectedItems = items.filter((item) => selected.has(item.id)); if (!chosen || !selectedItems.length) return; if (!window.confirm(`将 ${selectedItems.length} 条实验关联到：${chosen.title} · ${chosen.id}？`)) return; batch.disabled = true; const result = await view.assignExperimentBatch(selectedItems, chosen); new Notice(`批量关联：成功 ${result.success.length}，跳过 ${result.skipped.length}，失败 ${result.failed.length}`); batch.disabled = false; view.renderPage(); });
-  items.forEach((item) => { const row = card.createDiv({ cls: 'phdcc-experiment-row' }); const input = row.createEl('input', { attr: { type: 'checkbox', 'aria-label': `选择 ${item.title}` } }); input.addEventListener('change', () => input.checked ? selected.add(item.id) : selected.delete(item.id)); const main = row.createDiv({ cls: 'phdcc-experiment-main' }); const title = main.createDiv({ cls: 'phdcc-file-title', text: item.title }); title.addEventListener('click', () => void view.openFile(item.file)); main.createDiv({ cls: 'phdcc-file-meta', text: `${item.date || '无日期'} · ${item.sample || '未补充样本'} · ${item.id}` }); const select = row.createEl('select', { cls: 'phdcc-relation-select', attr: { 'aria-label': `为 ${item.title} 选择课题` } }); select.createEl('option', { text: '不关联', value: '' }); projects.forEach((project) => select.createEl('option', { text: `${project.title} · ${project.id}`, value: project.id })); const save = row.createEl('button', { cls: 'phdcc-row-action', text: '保存', attr: { type: 'button' } }); save.addEventListener('click', async () => { const project = projects.find((candidate) => candidate.id === select.value); if (!project) return; save.disabled = true; const result = await view.assignExperiment(item, project); new Notice(result.status === 'success' ? '实验课题已更新' : `更新失败：${result.error || result.reason}`); view.renderPage(); }); });
-  if (legacy.length) { const old = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' }); old.createEl('h3', { text: `旧实验记录：${legacy.length} 条` }); old.createDiv({ cls: 'phdcc-empty', text: 'Legacy 实验不会混入正常未归属列表；可逐条执行“升级并关联”。' }); legacy.forEach((item) => { const row = old.createDiv({ cls: 'phdcc-file-row' }); row.createDiv({ cls: 'phdcc-file-title', text: item.title }); const projectSelect = row.createEl('select', { cls: 'phdcc-relation-select' }); projectSelect.createEl('option', { text: '选择课题', value: '' }); projects.forEach((project) => projectSelect.createEl('option', { text: `${project.title} · ${project.id}`, value: project.id })); const upgrade = row.createEl('button', { cls: 'phdcc-row-action', text: '升级并关联', attr: { type: 'button' } }); upgrade.addEventListener('click', async () => { const project = projects.find((candidate) => candidate.id === projectSelect.value); if (!project) return; upgrade.disabled = true; const result = await view.upgradeLegacyExperiment(item, project); new Notice(result.status === 'success' ? '实验已升级并关联' : `升级失败：${result.error}`); view.renderPage(); }); }); }
+  items.forEach((item) => { const row = card.createDiv({ cls: 'phdcc-experiment-row' }); const input = row.createEl('input', { attr: { type: 'checkbox', 'aria-label': `选择 ${item.title}` } }); input.addEventListener('change', () => input.checked ? selected.add(item.id) : selected.delete(item.id)); const main = row.createDiv({ cls: 'phdcc-experiment-main' }); const title = main.createDiv({ cls: 'phdcc-file-title', text: item.title }); title.addEventListener('click', () => void view.openFile(item.file)); main.createDiv({ cls: 'phdcc-file-meta', text: `${item.date || '无日期'} · ${item.sample || '未补充样本'} · ${item.id}` }); const suggestion = suggestProjectForExperiment(item, view.entityStore.listCompounds(), projects); if (suggestion) { const suggestLine = main.createDiv({ cls: 'phdcc-file-next', text: `建议归属：${suggestion.title} · ${suggestion.reason}` }); const accept = main.createEl('button', { cls: 'phdcc-row-action', text: '接受建议', attr: { type: 'button' } }); accept.addEventListener('click', async () => { accept.disabled = true; const result = await view.assignExperiment(item, projects.find((project) => project.id === suggestion.projectId)); new Notice(result.status === 'success' ? '已接受建议并关联实验' : `更新失败：${result.error || result.reason}`); view.renderPage(); }); } const select = row.createEl('select', { cls: 'phdcc-relation-select', attr: { 'aria-label': `为 ${item.title} 选择课题` } }); select.createEl('option', { text: '不关联', value: '' }); projects.forEach((project) => select.createEl('option', { text: `${project.title} · ${project.id}`, value: project.id })); const save = row.createEl('button', { cls: 'phdcc-row-action', text: '保存', attr: { type: 'button' } }); save.addEventListener('click', async () => { const project = projects.find((candidate) => candidate.id === select.value); if (!project) return; save.disabled = true; const result = await view.assignExperiment(item, project); new Notice(result.status === 'success' ? '实验课题已更新' : `更新失败：${result.error || result.reason}`); view.renderPage(); }); });
+  if (legacy.length) { const old = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' }); old.createEl('h3', { text: `旧实验记录：${legacy.length} 条` }); old.createDiv({ cls: 'phdcc-empty', text: 'Legacy 实验不会混入正常未归属列表；可逐条执行“升级并关联”。' }); legacy.forEach((item) => { const row = old.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: item.title }); title.addEventListener('click', () => void view.openFile(item.file)); const projectSelect = row.createEl('select', { cls: 'phdcc-relation-select' }); projectSelect.createEl('option', { text: '选择课题', value: '' }); projects.forEach((project) => projectSelect.createEl('option', { text: `${project.title} · ${project.id}`, value: project.id })); const upgrade = row.createEl('button', { cls: 'phdcc-row-action', text: '升级并关联', attr: { type: 'button' } }); upgrade.addEventListener('click', async () => { const project = projects.find((candidate) => candidate.id === projectSelect.value); if (!project) return; upgrade.disabled = true; const result = await view.upgradeLegacyExperiment(item, project); new Notice(result.status === 'success' ? '实验已升级并关联' : `升级失败：${result.error}`); view.renderPage(); }); }); }
+  if (invalid.length) { const broken = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' }); broken.createEl('h3', { text: `无效实验 ID：${invalid.length} 条` }); broken.createDiv({ cls: 'phdcc-empty', text: '这些记录的 record_id 前缀错误，不能按 Legacy 升级；请到关系检查中修复。' }); invalid.forEach((item) => { const row = broken.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: item.title }); title.addEventListener('click', () => void view.openFile(item.file)); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.id} · ${item.file.path}` }); }); }
 }
 
 module.exports = { renderUnassignedExperiments };
@@ -3339,9 +3353,9 @@ class WorkbenchView extends ItemView {
     modal.onClose = () => modal.contentEl.empty();
     modal.open();
   }
-  async assignExperiment(item, project) { const result = await updateExperimentProject(this.app, item.file, project, { expectedId: item.id, expectedProjectId: item.projectId || '' }); if (result.status === 'success') await this.researchDatabase.refresh(); return result; }
-  async assignExperimentBatch(items, project) { const result = await batchAssignExperiments(this.app, items, project); await this.researchDatabase.refresh(); return result; }
-  async upgradeLegacyExperiment(item, project) { const result = await upgradeLegacyExperimentAndAssign(this.app, item.file, project); await this.researchDatabase.refresh(); return result; }
+  async assignExperiment(item, project) { const result = await updateExperimentProject(this.app, item.file, project, { expectedId: item.id, expectedProjectId: item.projectId || '', entityStore: this.entityStore }); if (result.status === 'success') await this.researchDatabase.refresh(); return result; }
+  async assignExperimentBatch(items, project) { const result = await batchAssignExperiments(this.app, items, project, { entityStore: this.entityStore }); await this.researchDatabase.refresh(); return result; }
+  async upgradeLegacyExperiment(item, project) { const result = await upgradeLegacyExperimentAndAssign(this.app, item.file, project, { entityStore: this.entityStore }); await this.researchDatabase.refresh(); return result; }
   openCompoundModal() { new CompoundModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openDataAssetModal() { new DataAssetModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openMigrationModal() { new MigrationModal(this.app, this.plugin, { onCompleted: async () => { await this.refresh(); } }).open(); }
@@ -3656,7 +3670,7 @@ class WorkbenchView extends ItemView {
   }
 
   _renderExperimentPage() {
-    this.renderPageHeader('实验记录', '新建记录存入工作台；旧记录保持只读', {
+    this.renderPageHeader('实验记录', '新建记录存入工作台；永久实验可快速修改课题归属', {
       label: '+ 新增实验记录',
       onClick: () => this.openExperimentModal()
     });
@@ -3687,6 +3701,10 @@ class WorkbenchView extends ItemView {
     const side = row.createDiv({ cls: 'phdcc-experiment-side' });
     createBadge(side, EXPERIMENT_STATUS_LABEL[info.status] || '未设置', badgeTone(info.status));
     if (info.recordId) side.createDiv({ cls: 'phdcc-record-id', text: info.recordId });
+    if (info.recordId && info.recordId.startsWith('EXP-')) {
+      const relation = side.createEl('button', { cls: 'phdcc-row-action', text: '修改归属', attr: { type: 'button' } });
+      relation.addEventListener('click', () => this.openProjectRelationModal({ file, id: info.recordId, title: info.title, projectId: info.projectId, project: info.project }));
+    }
     const action = side.createEl('button', { cls: 'phdcc-row-action', text: '打开', attr: { type: 'button', title: info.path } });
     action.addEventListener('click', () => { void this.openFile(file); });
   }

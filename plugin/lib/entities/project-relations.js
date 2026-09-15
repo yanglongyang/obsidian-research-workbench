@@ -46,8 +46,14 @@ async function updateExperimentProject(app, file, project, options = {}) {
   if (!validateEntityRecord({ id: current.record_id, type: 'experiment', path: file.path }).entityIdValid) return { status: 'failed', error: '实验不是合法的永久 EXP ID' };
   if (expectedId && String(current.record_id || '').trim() !== expectedId) return { status: 'skipped', reason: 'record_id changed since preview' };
   if (expectedProjectId !== null && String(current.project_id || '').trim() !== expectedProjectId) return { status: 'skipped', reason: 'relation changed since preview' };
-  const projectId = String(project?.id || '').trim(); const projectTitle = String(project?.title || '').trim();
-  if (projectId && (!validateEntityRecord({ id: projectId, type: 'project', path: project.file?.path }).entityIdValid || !projectTitle)) return { status: 'failed', error: '目标课题无效' };
+  const projectId = String(project?.id || '').trim();
+  let freshProject = project;
+  if (projectId && options.entityStore) {
+    freshProject = options.entityStore.getById(projectId, 'project');
+    if (!freshProject) return { status: 'failed', error: '目标课题已不存在或类型已变化' };
+  }
+  const projectTitle = String(freshProject?.title || '').trim();
+  if (projectId && (!validateEntityRecord({ id: projectId, type: 'project', path: freshProject?.file?.path }).entityIdValid || !projectTitle)) return { status: 'failed', error: '目标课题无效' };
   try {
     await app.fileManager.processFrontMatter(file, (data) => {
       if (data.kind !== 'experiment' || String(data.record_id || '').trim() !== String(current.record_id || '').trim()) throw new Error('实验在写入前发生变化');
@@ -68,7 +74,7 @@ async function updateExperimentProject(app, file, project, options = {}) {
 async function batchAssignExperiments(app, items, project, options = {}) {
   const results = { status: 'completed', success: [], skipped: [], failed: [] };
   for (const item of items || []) {
-    const result = await updateExperimentProject(app, item.file, project, { expectedId: item.id, expectedProjectId: item.projectId || '' });
+    const result = await updateExperimentProject(app, item.file, project, { expectedId: item.id, expectedProjectId: item.projectId || '', entityStore: options.entityStore });
     if (result.status === 'success') results.success.push({ item, result });
     else if (result.status === 'skipped') results.skipped.push({ item, reason: result.reason || result.error });
     else results.failed.push({ item, error: result.error });
@@ -77,16 +83,20 @@ async function batchAssignExperiments(app, items, project, options = {}) {
   return results;
 }
 
-async function upgradeLegacyExperimentAndAssign(app, file, project) {
+async function upgradeLegacyExperimentAndAssign(app, file, project, options = {}) {
   const current = frontmatterOf(app, file);
   if (!current || current.kind !== 'experiment') return { status: 'failed', error: '实验文件不存在或类型不正确' };
-  if (validateEntityRecord({ id: current.record_id, type: 'experiment', path: file.path }).entityIdValid) return { status: 'failed', error: '该实验已经是永久 ID' };
+  const rawId = String(current.record_id || '').trim();
+  if (validateEntityRecord({ id: rawId, type: 'experiment', path: file.path }).entityIdValid) return { status: 'failed', error: '该实验已经是永久 ID' };
+  if (rawId && !rawId.startsWith('LEGACY-')) return { status: 'failed', error: '该实验的 record_id 前缀无效，请先在关系检查中修复' };
+  const targetId = String(project?.id || '').trim();
+  if (targetId && options.entityStore && !options.entityStore.getById(targetId, 'project')) return { status: 'failed', error: '目标课题已不存在或类型已变化' };
   const permanentId = generateRecordId('EXP');
   try {
     await app.fileManager.processFrontMatter(file, (data) => { if (data.kind !== 'experiment' || String(data.record_id || '').trim() !== String(current.record_id || '').trim()) throw new Error('实验在升级前发生变化'); data.record_id = permanentId; data.updated = new Date().toISOString(); });
     const upgraded = frontmatterOf(app, file);
     if (!upgraded || String(upgraded.record_id || '').trim() !== permanentId) return { status: 'failed', error: 'EXP ID 写入后回读失败' };
-    const relation = await updateExperimentProject(app, file, project, { expectedId: permanentId, expectedProjectId: String(upgraded.project_id || '').trim() });
+    const relation = await updateExperimentProject(app, file, project, { expectedId: permanentId, expectedProjectId: String(upgraded.project_id || '').trim(), entityStore: options.entityStore });
     if (relation.status !== 'success') return { status: relation.status, error: relation.error || relation.reason, permanentId };
     return { status: 'success', permanentId };
   } catch (error) { return { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
