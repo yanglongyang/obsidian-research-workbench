@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — v0.5 Project Relations / Project Hub
+
+- 新增 Project Hub：按永久 `project_id` 聚合实验、化合物、数据资产、任务与只读时间线。
+- 新增未归属实验 Inbox，支持单条/批量关联课题、建议归属提示和 Legacy 实验逐条升级。
+- 从 Project Hub 新建实验时自动预填课题关系；所有关系写入均执行 TOCTOU 检查和回读验证。
+
 ## Unreleased
 
 ### Added
