@@ -1,6 +1,6 @@
 # Obsidian 科研工作台 / Research Workbench
 
-一个本地优先的 Obsidian 科研信息系统，当前版本为 `v0.6.0` UI Refresh。
+一个本地优先的 Obsidian 科研信息系统，当前版本为 `v0.6.1` Visual Redesign / Modern Workspace。
 
 ## 架构原则
 

@@ -4,25 +4,35 @@
   --phdcc-sidebar: var(--background-secondary, #f1f3f6);
   --phdcc-surface: var(--background-primary-alt, #ffffff);
   --phdcc-soft: var(--background-secondary-alt, #f0f2f5);
-  --phdcc-accent: #5865e8;
-  --phdcc-info: #5865e8;
-  --phdcc-bg: var(--background-primary, #fbfbf8);
-  --phdcc-sidebar: var(--background-secondary, #f1f3ee);
-  --phdcc-surface: var(--background-primary-alt, #ffffff);
-  --phdcc-soft: var(--background-secondary, #f6f7f3);
   --phdcc-border: var(--background-modifier-border, #e2e5df);
   --phdcc-border-strong: var(--background-modifier-border-hover, #cfd4cb);
   --phdcc-text: var(--text-normal, #20211e);
   --phdcc-muted: var(--text-muted, #70736c);
   --phdcc-faint: var(--text-faint, #9a9e96);
-  --phdcc-accent: #171815;
+  --phdcc-accent: #5865e8;
   --phdcc-on-accent: #ffffff;
   --phdcc-danger: var(--text-error, #b64a3b);
   --phdcc-success: var(--text-success, #3f855f);
   --phdcc-warning: var(--text-warning, #9a7410);
-  --phdcc-info: var(--interactive-accent, #587da8);
+  --phdcc-info: #5865e8;
   --phdcc-shadow: 0 1px 2px rgba(24, 28, 20, 0.04), 0 12px 30px rgba(24, 28, 20, 0.06);
   --phdcc-radius: 12px;
+  --phdcc-surface-soft: var(--background-secondary-alt, var(--phdcc-soft));
+  --phdcc-surface-hover: var(--background-modifier-hover, var(--phdcc-soft));
+  --phdcc-accent-soft: color-mix(in srgb, var(--phdcc-accent) 12%, var(--phdcc-surface));
+  --phdcc-danger-soft: color-mix(in srgb, var(--phdcc-danger) 10%, var(--phdcc-surface));
+  --phdcc-success-soft: color-mix(in srgb, var(--phdcc-success) 10%, var(--phdcc-surface));
+  --phdcc-warning-soft: color-mix(in srgb, var(--phdcc-warning) 12%, var(--phdcc-surface));
+  --phdcc-info-soft: color-mix(in srgb, var(--phdcc-info) 10%, var(--phdcc-surface));
+  --phdcc-space-1: 4px;
+  --phdcc-space-2: 8px;
+  --phdcc-space-3: 12px;
+  --phdcc-space-4: 16px;
+  --phdcc-space-5: 20px;
+  --phdcc-space-6: 24px;
+  --phdcc-radius-sm: 6px;
+  --phdcc-radius-md: 8px;
+  --phdcc-radius-lg: 12px;
 }
 
 .theme-dark .phdcc-view,
@@ -31,27 +41,19 @@
   --phdcc-sidebar: #1d2025;
   --phdcc-surface: #202329;
   --phdcc-soft: #292d34;
-  --phdcc-accent: #7b86ff;
-  --phdcc-info: #7b86ff;
-}
-
-.theme-dark .phdcc-view,
-.theme-dark .phdcc-task-modal {
-  --phdcc-bg: var(--background-primary, #1e1f1c);
-  --phdcc-sidebar: var(--background-secondary, #262824);
-  --phdcc-surface: var(--background-primary-alt, #292b27);
-  --phdcc-soft: var(--background-secondary, #32342f);
+  --phdcc-surface-soft: #292d34;
+  --phdcc-surface-hover: #30343b;
   --phdcc-border: var(--background-modifier-border, #3c4038);
   --phdcc-border-strong: var(--background-modifier-border-hover, #50544c);
   --phdcc-text: var(--text-normal, #eceee8);
   --phdcc-muted: var(--text-muted, #a8aba3);
   --phdcc-faint: var(--text-faint, #777b73);
-  --phdcc-accent: #eceee8;
-  --phdcc-on-accent: #1e1f1c;
+  --phdcc-accent: #7b86ff;
+  --phdcc-on-accent: #ffffff;
   --phdcc-danger: var(--text-error, #b64a3b);
   --phdcc-success: var(--text-success, #73b58e);
   --phdcc-warning: var(--text-warning, #d6b54a);
-  --phdcc-info: var(--interactive-accent, #83a9d4);
+  --phdcc-info: #7b86ff;
   --phdcc-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 30px rgba(0, 0, 0, 0.25);
 }
 
@@ -824,7 +826,8 @@
   .phdcc-view .phdcc-main { flex: 1; }
   .phdcc-view .phdcc-topbar { position: static; min-height: auto; flex-wrap: wrap; padding: 8px 11px; }
   .phdcc-view .phdcc-date { flex: 1; margin: 0; }
-  .phdcc-view .phdcc-search { position: static; order: 3; width: 100%; flex: 1 0 100%; transform: none; }
+  .phdcc-view .phdcc-search,
+  .phdcc-view .phdcc-topbar .phdcc-search { position: static; order: 3; width: 100%; flex: 1 0 100%; transform: none; }
   .phdcc-view .phdcc-page { padding: 20px 15px 44px; }
   .phdcc-view .phdcc-page-title { font-size: 26px; }
   .phdcc-view .phdcc-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -860,27 +863,7 @@
 .phdcc-migration-preview { max-height: 320px; overflow: auto; margin: 12px 0; }
 .phdcc-migration-preview li { margin: 4px 0; font-family: var(--font-monospace); font-size: 0.85em; }
 
-/* v0.6 UI refresh: restrained, dense, Obsidian-native presentation. */
-.phdcc-view,
-.phdcc-task-modal {
-  --phdcc-surface-soft: var(--background-secondary-alt, var(--phdcc-soft));
-  --phdcc-surface-hover: var(--background-modifier-hover, var(--phdcc-soft));
-  --phdcc-accent-soft: color-mix(in srgb, var(--interactive-accent, var(--phdcc-info)) 12%, var(--phdcc-surface));
-  --phdcc-danger-soft: color-mix(in srgb, var(--phdcc-danger) 10%, var(--phdcc-surface));
-  --phdcc-success-soft: color-mix(in srgb, var(--phdcc-success) 10%, var(--phdcc-surface));
-  --phdcc-warning-soft: color-mix(in srgb, var(--phdcc-warning) 12%, var(--phdcc-surface));
-  --phdcc-info-soft: color-mix(in srgb, var(--phdcc-info) 10%, var(--phdcc-surface));
-  --phdcc-space-1: 4px;
-  --phdcc-space-2: 8px;
-  --phdcc-space-3: 12px;
-  --phdcc-space-4: 16px;
-  --phdcc-space-5: 20px;
-  --phdcc-space-6: 24px;
-  --phdcc-radius-sm: 5px;
-  --phdcc-radius-md: 8px;
-  --phdcc-radius-lg: 10px;
-}
-
+/* v0.6.1 visual system: component and page composition layer. */
 .phdcc-view { font-size: 13px; line-height: 1.4; }
 .phdcc-view .phdcc-shell { grid-template-columns: 208px minmax(0, 1fr); }
 .phdcc-view .phdcc-sidebar { padding: 16px 10px 22px; }
@@ -895,7 +878,10 @@
 .phdcc-view .phdcc-nav-item.is-active::before { background: var(--phdcc-info); }
 .phdcc-view .phdcc-nav-count { min-width: 19px; padding: 1px 5px; border: 0; background: var(--phdcc-surface-soft); }
 .phdcc-view .phdcc-topbar { min-height: 52px; gap: 12px; padding: 0 20px; background: color-mix(in srgb, var(--phdcc-bg) 96%, transparent); backdrop-filter: blur(8px); }
+.phdcc-view .phdcc-topbar-context-group { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .phdcc-view .phdcc-topbar-context { color: var(--phdcc-text); font-size: 12px; font-weight: 700; letter-spacing: .01em; }
+.phdcc-view .phdcc-topbar-context-group .phdcc-date { margin: 0; color: var(--phdcc-faint); font-size: 11px; font-weight: 500; }
+.phdcc-view .phdcc-topbar .phdcc-search { position: static; flex: 0 1 360px; width: auto; transform: none; }
 .phdcc-view .phdcc-search { width: min(360px, 38%); height: 34px; border-color: var(--phdcc-border); border-radius: var(--phdcc-radius-md); background: var(--phdcc-surface-soft); }
 .phdcc-view .phdcc-search:focus-within { border-color: var(--phdcc-info); box-shadow: 0 0 0 2px color-mix(in srgb, var(--phdcc-info) 18%, transparent); }
 .phdcc-view .phdcc-key-hint { font-size: 10px; }
@@ -988,6 +974,22 @@
 .phdcc-view .phdcc-timeline-event { padding-left: 14px; border-left: 1px solid var(--phdcc-border-strong); }
 .phdcc-view .phdcc-timeline-event::before { position: absolute; left: -4px; top: 16px; width: 7px; height: 7px; border-radius: 50%; background: var(--phdcc-info); content: ''; }
 .phdcc-view .phdcc-file-next { overflow-wrap: anywhere; }
+.phdcc-view .phdcc-project-list { display: block; }
+.phdcc-view .phdcc-project-list .phdcc-project-card:first-child { border-top: 0; }
+.phdcc-view .phdcc-data-list,
+.phdcc-view .phdcc-data-explorer,
+.phdcc-view .phdcc-entity-list,
+.phdcc-view .phdcc-console,
+.phdcc-view .phdcc-diagnostics,
+.phdcc-view .phdcc-inbox-panel { padding: 14px 18px; border-radius: 4px; }
+.phdcc-view .phdcc-data-list,
+.phdcc-view .phdcc-data-explorer { border-left: 3px solid var(--phdcc-accent); }
+.phdcc-view .phdcc-console { border-top: 2px solid var(--phdcc-info); background: color-mix(in srgb, var(--phdcc-info) 3%, var(--phdcc-surface)); }
+.phdcc-view .phdcc-diagnostics { border-left: 3px solid var(--phdcc-danger); background: color-mix(in srgb, var(--phdcc-danger) 2%, var(--phdcc-surface)); }
+.phdcc-view .phdcc-inbox-panel { border-left: 3px solid var(--phdcc-warning); background: color-mix(in srgb, var(--phdcc-warning) 3%, var(--phdcc-surface)); }
+.phdcc-view .phdcc-inbox-panel .phdcc-file-next { background: var(--phdcc-info-soft); color: var(--phdcc-info); }
+.phdcc-view .phdcc-hub-section:not(.phdcc-project-overview-grid) { border: 0; background: transparent; padding: 0; }
+.phdcc-view .phdcc-project-overview-grid > .phdcc-card:nth-child(2) { border-color: color-mix(in srgb, var(--phdcc-warning) 28%, var(--phdcc-border)); background: color-mix(in srgb, var(--phdcc-warning) 4%, var(--phdcc-surface)); }
 
 .phdcc-task-modal { border-radius: var(--phdcc-radius-lg); box-shadow: var(--phdcc-shadow); }
 .phdcc-task-modal .setting-item { gap: 12px; padding: 9px 0; border-top: 1px solid var(--phdcc-border); }

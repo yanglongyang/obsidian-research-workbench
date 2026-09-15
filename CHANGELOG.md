@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 — Visual Redesign / Modern Workspace
+
+- 重做 Modern Scientific Command Center 的视觉架构：应用导航 Rail、Workspace Header、品牌色层级、页面构图和 Project Hub Tabs。
+- Project Hub、实验、未归属实验、数据库、关系检查、NMR、待处理队列和表单改为更明确的桌面工作区/诊断/处理控制台表现。
+- No schema changes. No workflow behavior changes. No scientific data migration.
+
 ## 0.6.0 — UI Refresh
 
 - 系统性刷新设计 tokens、排版密度、按钮/徽章/行和页面层级，统一 Light/Dark 与窄窗格表现。

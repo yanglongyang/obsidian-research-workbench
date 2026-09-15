@@ -237,11 +237,9 @@ class WorkbenchView extends ItemView {
 
   renderTopbar(main) {
     const topbar = main.createDiv({ cls: 'phdcc-topbar' });
-    this.topbarContext = topbar.createDiv({ cls: 'phdcc-topbar-context', text: '科研工作台' });
-    topbar.createDiv({
-      cls: 'phdcc-date',
-      text: new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
-    });
+    const contextGroup = topbar.createDiv({ cls: 'phdcc-topbar-context-group' });
+    this.topbarContext = contextGroup.createDiv({ cls: 'phdcc-topbar-context', text: '科研工作台' });
+    contextGroup.createDiv({ cls: 'phdcc-date', text: new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date()) });
     const searchWrap = topbar.createDiv({ cls: 'phdcc-search' });
     const searchIcon = searchWrap.createSpan({ cls: 'phdcc-search-icon' });
     setIcon(searchIcon, 'search');
@@ -258,6 +256,7 @@ class WorkbenchView extends ItemView {
 
   renderPage() {
     if (this.topbarContext) this.topbarContext.setText(({ overview: '总览', today: '今日待办', calendar: '日历', projects: '课题项目', experiments: '实验记录', 'unassigned-experiments': '未归属实验', compound: '化合物', data: '数据资产', 'nmr-inbox': '待解核磁', 'work-queue': '待处理队列', 'research-db': '科研数据库', integrity: '关系检查', reviews: '周月总结', 'daily-review': '今日复盘', literature: '文献资料', writing: '写作管线' }[this.activeSection] || '科研工作台'));
+    this.pageEl.setAttr('data-section', this.activeSection);
     this.pageEl.empty();
     const renderer = {
       overview: () => this.renderOverview(),
@@ -618,7 +617,7 @@ class WorkbenchView extends ItemView {
     }
     this.renderPageHeader(title, '课题、实验与数据的关系入口', { label: '+ 新增课题', onClick: () => this.openProjectModal() });
     const items = formal.length ? formal : this.filteredFiles(this.readOnlyItems(PROJECT_FOLDER, 30, true));
-    const grid = this.pageEl.createDiv({ cls: 'phdcc-project-grid' });
+    const grid = this.pageEl.createDiv({ cls: 'phdcc-project-grid phdcc-project-list' });
     if (!items.length) return void grid.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配项目' : '暂无项目；可从原工作台的课题模板开始创建。' });
     items.forEach((item) => {
       const file = item.file || item;
@@ -634,7 +633,7 @@ class WorkbenchView extends ItemView {
 
   _renderCompoundPage() {
     this.renderPageHeader('化合物', '化合物是实验与数据资产的稳定关联节点', { label: '+ 新增化合物', onClick: () => this.openCompoundModal() });
-    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-entity-list' });
     const items = this.entityStore.listCompounds().filter((item) => !this.searchQuery || `${item.title} ${item.compoundCode} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
     if (!items.length) return void card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配化合物' : '暂无化合物' });
     items.forEach((item) => {
@@ -651,7 +650,7 @@ class WorkbenchView extends ItemView {
     this.renderPageHeader('关系检查', '永久 ID 引用完整性与科研实体关系', { label: '返回科研数据库', onClick: () => { this.activeSection = 'research-db'; this.saveUiState(); this.renderPage(); } });
     const stats = this.pageEl.createDiv({ cls: 'phdcc-stats' });
     [['有效关系', this.researchDatabase.validRelationCount || 0], ['问题', this.researchDatabase.relationshipIssues?.length || 0], ['重复 ID', this.researchDatabase.duplicateIds?.length || 0]].forEach(([label, value]) => { const card = stats.createDiv({ cls: 'phdcc-stat-card' }); card.createDiv({ cls: 'phdcc-stat-label', text: label }); card.createDiv({ cls: 'phdcc-stat-value', text: String(value) }); });
-    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-diagnostics' });
     if (!this.researchDatabase.relationshipIssues?.length) return void card.createDiv({ cls: 'phdcc-empty', text: '关系检查通过，未发现问题。' });
     const labels = { missing_target: '缺失目标', wrong_target_type: '类型错误', legacy_reference: '旧 ID 引用', self_reference: '自引用', duplicate_record_id: '重复 ID', relation_conflict: '关系冲突' };
     this.researchDatabase.relationshipIssues.forEach((issue) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); row.createDiv({ cls: 'phdcc-file-title', text: `${labels[issue.type] || issue.type} · ${issue.message}` }); row.createDiv({ cls: 'phdcc-file-meta', text: `${issue.sourcePath} · ${issue.field || ''} · ${issue.targetId || ''} · ${issue.type}` }); const open = row.createEl('button', { cls: 'phdcc-row-action', text: '打开来源', attr: { type: 'button' } }); open.addEventListener('click', () => { const file = this.app.vault.getAbstractFileByPath(issue.sourcePath); if (file) void this.openFile(file); }); });
@@ -662,7 +661,7 @@ class WorkbenchView extends ItemView {
       label: '+ 新增实验记录',
       onClick: () => this.openExperimentModal()
     });
-    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-experiment-list' });
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-experiment-list phdcc-data-list' });
     const files = this.filteredFiles(this.readOnlyItems(EXPERIMENT_FOLDERS, 50, false));
     if (!files.length) {
       const empty = card.createDiv({ cls: 'phdcc-empty' });
@@ -760,7 +759,7 @@ class WorkbenchView extends ItemView {
         card.createDiv({ cls: 'phdcc-stat-label', text: label });
         card.createDiv({ cls: 'phdcc-stat-value', text: String(value) });
       });
-    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-data-explorer' });
     if (this.researchDatabase.error) {
       card.createDiv({ cls: 'phdcc-empty', text: `数据库扫描失败：${this.researchDatabase.error}` });
       return;
@@ -818,7 +817,7 @@ class WorkbenchView extends ItemView {
     this.renderPageHeader('数据资产', '原始数据位置与派生索引', { label: '+ 新增数据资产', onClick: () => this.openDataAssetModal() });
     const consolidate = this.pageEl.createEl('button', { cls: 'phdcc-page-add phdcc-calendar-add', text: '合并旧核磁记录', attr: { type: 'button', title: '将旧单条 NMR 数据资产合并为一个台账' } });
     consolidate.addEventListener('click', () => this.openNmrLedgerMigrationModal());
-    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-data-explorer' });
     const assets = this.entityStore.listDataAssets().filter((item) => !this.searchQuery || `${item.title} ${item.assetType} ${item.dataPath} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
     if (assets.length) assets.forEach((item) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: item.title }); makeInteractive(title, () => { void this.openFile(item.file); }); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.assetType || 'other'} · ${item.project || '未关联课题'} · ${item.id}` }); row.createDiv({ cls: 'phdcc-file-next', text: item.dataPath || '未记录数据路径' }); });
     const legacy = this.filteredFiles(this.readOnlyItems(DATA_FOLDER, 30, true));
@@ -862,7 +861,7 @@ class WorkbenchView extends ItemView {
 
   renderWorkQueueSource(queue) {
     const { source } = queue;
-    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-console' });
     card.createEl('h3', { text: source.label });
     card.createDiv({ cls: 'phdcc-file-meta', text: `${source.description}　·　${source.root || '未配置'}` });
     const error = this.workQueueErrors[source.id];
@@ -930,7 +929,7 @@ class WorkbenchView extends ItemView {
       card.createDiv({ cls: 'phdcc-stat-label', text: label });
       card.createDiv({ cls: 'phdcc-stat-value', text: value });
     });
-    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-console' });
     const description = card.createDiv({ cls: 'phdcc-file-meta', text: `来源：${this.nmrInboxStore.inboxFolder || '未配置'}　·　归档：${this.nmrInboxStore.archiveFolder || '未配置'}　·　选择后确认才会移动原始数据` });
     description.addClass('phdcc-nmr-note');
     if (this.nmrError) {

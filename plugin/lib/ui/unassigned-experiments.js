@@ -9,7 +9,7 @@ function renderUnassignedExperiments(view) {
   const allExperiments = view.entityStore.list('experiment');
   const legacy = allExperiments.filter((item) => { const rawId = String(item.id || '').trim(); return !rawId || rawId.startsWith('LEGACY-'); });
   const invalid = allExperiments.filter((item) => { const rawId = String(item.id || '').trim(); return rawId && !rawId.startsWith('LEGACY-') && !validateEntityRecord(item).entityIdValid; });
-  const card = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
+  const card = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-inbox-panel' });
   card.createEl('h3', { text: `未归属实验：${items.length} 条` });
   if (!items.length) card.createDiv({ cls: 'phdcc-empty', text: '没有待整理的永久实验记录。' });
   const projects = view.entityStore.listProjects();
