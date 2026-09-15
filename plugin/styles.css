@@ -1005,10 +1005,10 @@
 .phdcc-task-modal textarea:focus-visible { outline: 2px solid var(--phdcc-info); outline-offset: 2px; }
 
 /* v0.6.2 compound registry: a dense structure-first scientific table. */
-.phdcc-view .phdcc-compound-registry { width: 100%; overflow-x: auto; background: var(--phdcc-surface); border-top: 1px solid var(--phdcc-border); }
+.phdcc-view .phdcc-compound-registry { width: min(100%, 1020px); margin: 0 auto; overflow-x: auto; background: var(--phdcc-surface); border-top: 1px solid var(--phdcc-border); }
 .phdcc-view .phdcc-compound-header,
-.phdcc-view .phdcc-compound-row { display: grid; grid-template-columns: minmax(170px, 210px) minmax(130px, 165px) minmax(180px, 1fr) 110px 150px; column-gap: 14px; min-width: 760px; }
-.phdcc-view .phdcc-compound-header { min-height: 31px; align-items: center; color: var(--phdcc-muted); border-bottom: 1px solid var(--phdcc-border-strong); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.phdcc-view .phdcc-compound-row { display: grid; grid-template-columns: 220px 170px 250px 120px 170px; column-gap: 14px; min-width: 986px; }
+.phdcc-view .phdcc-compound-header { min-height: 31px; align-items: center; color: var(--phdcc-muted); border-bottom: 1px solid var(--phdcc-border-strong); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-align: center; text-transform: uppercase; }
 .phdcc-view .phdcc-compound-row { min-height: 124px; align-items: stretch; border-bottom: 1px solid var(--phdcc-border); }
 .phdcc-view .phdcc-compound-cell { min-width: 0; padding: 10px 8px; overflow-wrap: anywhere; }
 .phdcc-view .phdcc-compound-structure { display: flex; align-items: center; justify-content: center; min-height: 104px; margin: 9px 0; padding: 6px; overflow: hidden; background: #fff; border: 1px solid #d9dde5; }
@@ -1020,22 +1020,29 @@
 .phdcc-view .phdcc-compound-identity,
 .phdcc-view .phdcc-compound-project,
 .phdcc-view .phdcc-compound-molecular-weight,
-.phdcc-view .phdcc-compound-actions { display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.phdcc-view .phdcc-compound-actions { display: flex; align-items: center; justify-content: center; text-align: center; }
+.phdcc-view .phdcc-compound-identity,
+.phdcc-view .phdcc-compound-project,
+.phdcc-view .phdcc-compound-molecular-weight { flex-direction: column; gap: 4px; }
 .phdcc-view .phdcc-compound-code { color: var(--phdcc-accent); font-size: 14px; font-weight: 750; cursor: pointer; }
 .phdcc-view .phdcc-compound-code:hover { text-decoration: underline; }
 .phdcc-view .phdcc-compound-name { color: var(--phdcc-text); font-size: 13px; font-weight: 650; }
-.phdcc-view .phdcc-compound-project { color: var(--phdcc-text); font-size: 12px; }
+.phdcc-view .phdcc-compound-project { max-width: 240px; color: var(--phdcc-text); font-size: 12px; line-height: 1.4; }
 .phdcc-view .phdcc-compound-project.is-muted,
 .phdcc-view .phdcc-compound-molecular-weight.is-muted { color: var(--phdcc-muted); }
-.phdcc-view .phdcc-compound-molecular-weight { align-items: flex-end; color: var(--phdcc-text); font-variant-numeric: tabular-nums; text-align: right; }
-.phdcc-view .phdcc-compound-actions { flex-direction: row; align-items: center; flex-wrap: wrap; }
+.phdcc-view .phdcc-compound-molecular-weight { color: var(--phdcc-text); font-variant-numeric: tabular-nums; }
+.phdcc-view .phdcc-compound-actions { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+.phdcc-view .phdcc-compound-identity,
+.phdcc-view .phdcc-compound-project,
+.phdcc-view .phdcc-compound-molecular-weight { align-items: center; justify-content: center; text-align: center; }
+.phdcc-view .phdcc-record-id { opacity: .65; }
 .phdcc-view .phdcc-compound-actions .phdcc-row-action { white-space: nowrap; }
 
 @media (max-width: 1100px) {
   .phdcc-view .phdcc-page { padding-left: 24px; padding-right: 24px; }
   .phdcc-view .phdcc-search { width: min(340px, 40%); }
   .phdcc-view .phdcc-compound-header,
-  .phdcc-view .phdcc-compound-row { grid-template-columns: 150px 140px minmax(160px, 1fr) 90px 130px; column-gap: 10px; }
+  .phdcc-view .phdcc-compound-row { grid-template-columns: 200px 155px 220px 100px 145px; column-gap: 10px; min-width: 860px; }
 }
 @media (max-width: 800px) {
   .phdcc-view .phdcc-shell { grid-template-columns: 180px minmax(0, 1fr); }
