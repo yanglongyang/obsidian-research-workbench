@@ -31,7 +31,9 @@ class EntityStore {
       compoundCode: text(frontmatter.compound_code),
       assetType: text(frontmatter.asset_type),
       status: text(frontmatter.status),
+      stage: text(frontmatter.stage),
       nextAction: text(frontmatter.next_action || frontmatter.nextAction),
+      keyResult: text(frontmatter.key_result),
       date: text(frontmatter.experiment_date || frontmatter.date || frontmatter.acquired_at),
       dataPath: text(frontmatter.data_path)
     })).sort((a, b) => a.title.localeCompare(b.title));

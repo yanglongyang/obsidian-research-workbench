@@ -1,4 +1,4 @@
-const { ItemView, Notice, setIcon } = require('obsidian');
+const { ItemView, Modal, Notice, Setting, setIcon } = require('obsidian');
 const {
   PROJECT_FOLDER,
   PROGRESS_FOLDER,
@@ -25,6 +25,9 @@ const { CompoundModal } = require('./modals/compound-modal');
 const { DataAssetModal } = require('./modals/data-asset-modal');
 const { MigrationModal } = require('./modals/migration-modal');
 const { NmrLedgerMigrationModal } = require('./modals/nmr-ledger-migration-modal');
+const { projectRelations, unassignedExperiments, suggestProjectForExperiment, updateExperimentProject, batchAssignExperiments, upgradeLegacyExperimentAndAssign } = require('./entities/project-relations');
+const projectHubUi = require('./ui/project-hub');
+const unassignedUi = require('./ui/unassigned-experiments');
 const pageRenderers = require('./ui/page-renderers');
 
 const VIEW_TYPE = 'phd-command-center-view';
@@ -32,7 +35,7 @@ const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 const PRIORITY_LABEL = { high: '高', medium: '中', low: '低' };
 const EXPERIMENT_STATUS_LABEL = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻' };
 const DATABASE_TYPE_LABELS = { task: '任务', experiment: '实验', project: '课题', compound: '化合物', 'data-asset': '数据资产', data: '数据', literature: '文献', writing: '写作', progress: '进展', note: '其他' };
-const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'experiments', 'compound', 'nmr-inbox', 'work-queue', 'data', 'literature', 'writing', 'daily-review', 'research-db', 'integrity']);
+const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'unassigned-experiments', 'experiments', 'compound', 'nmr-inbox', 'work-queue', 'data', 'literature', 'writing', 'daily-review', 'research-db', 'integrity']);
 
 const NAV_GROUPS = [
   ['总览', [
@@ -43,6 +46,7 @@ const NAV_GROUPS = [
   ['科研', [
     ['projects', '课题项目', 'flask-conical'],
     ['experiments', '实验记录', 'test-tube'],
+    ['unassigned-experiments', '未归属实验', 'circle-help'],
     ['compound', '化合物', 'atom'],
     ['data', '数据资产', 'database'],
     ['nmr-inbox', '待解核磁', 'scan-line'],
@@ -122,6 +126,7 @@ class WorkbenchView extends ItemView {
     this.workQueue = [];
     this.workQueueErrors = {};
     this.activeWorkQueueSource = 'spectra';
+    this.selectedProjectId = '';
     this.root = null;
     this.pageEl = null;
     this.searchInput = null;
@@ -207,6 +212,7 @@ class WorkbenchView extends ItemView {
         if (id === 'today') item.createSpan({ cls: 'phdcc-nav-count', text: String(this.tasks.filter((task) => task.due === localDate() && !isDone(task)).length) });
         if (id === 'nmr-inbox' && this.nmrScans.length) item.createSpan({ cls: 'phdcc-nav-count', text: String(this.nmrScans.length) });
         if (id === 'work-queue' && this.workQueue.length) item.createSpan({ cls: 'phdcc-nav-count', text: String(this.workQueue.reduce((count, queue) => count + queue.entries.length, 0)) });
+        if (id === 'unassigned-experiments') { const count = unassignedExperiments(this.entityStore).length; if (count) item.createSpan({ cls: 'phdcc-nav-count', text: String(count) }); }
         item.addEventListener('click', () => {
           this.activeSection = id;
           this.searchQuery = '';
@@ -245,6 +251,7 @@ class WorkbenchView extends ItemView {
       today: () => this.renderToday(),
       calendar: () => this.renderCalendar(),
       projects: () => pageRenderers.renderProjectPage(this, '课题项目'),
+      'unassigned-experiments': () => unassignedUi.renderUnassignedExperiments(this),
       reviews: () => this.renderReadOnlyPage('周月总结', PROGRESS_FOLDER, false),
       experiments: () => pageRenderers.renderExperimentPage(this),
       compound: () => pageRenderers.renderCompoundPage(this),
@@ -292,6 +299,8 @@ class WorkbenchView extends ItemView {
     try {
       new ExperimentModal(this.app, this.taskStore, {
         entityStore: this.entityStore,
+        projectId: options.projectId || '',
+        project: options.project || '',
         experimentDate: options.experimentDate || localDate(),
         onCreated: async (file) => {
           await this.openFile(file);
@@ -304,6 +313,24 @@ class WorkbenchView extends ItemView {
   }
 
   openProjectModal() { new ProjectModal(this.app, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
+  openProjectRelationModal(item) {
+    const modal = new Modal(this.app);
+    modal.onOpen = () => {
+      modal.contentEl.createEl('h2', { text: `修改实验归属 · ${item.title}` });
+      const projects = this.entityStore.listProjects();
+      modal.selectedProject = projects.find((project) => project.id === item.projectId) || null;
+      new Setting(modal.contentEl).setName('课题').addDropdown((dropdown) => { dropdown.addOption('', '不关联'); projects.forEach((project) => dropdown.addOption(project.id, `${project.title} · ${project.id}`)); dropdown.setValue(item.projectId || ''); dropdown.onChange((value) => { modal.selectedProject = projects.find((project) => project.id === value) || null; }); });
+      const footer = modal.contentEl.createDiv({ cls: 'modal-button-container' });
+      footer.createEl('button', { text: '取消', attr: { type: 'button' } }).addEventListener('click', () => modal.close());
+      const save = footer.createEl('button', { text: '保存', cls: 'mod-cta', attr: { type: 'button' } });
+      save.addEventListener('click', async () => { save.disabled = true; const result = await this.assignExperiment(item, modal.selectedProject || null); if (result.status === 'success') modal.close(); else { new Notice(result.error || result.reason || '更新失败'); save.disabled = false; } this.renderPage(); });
+    };
+    modal.onClose = () => modal.contentEl.empty();
+    modal.open();
+  }
+  async assignExperiment(item, project) { const result = await updateExperimentProject(this.app, item.file, project, { expectedId: item.id, expectedProjectId: item.projectId || '' }); if (result.status === 'success') await this.researchDatabase.refresh(); return result; }
+  async assignExperimentBatch(items, project) { const result = await batchAssignExperiments(this.app, items, project); await this.researchDatabase.refresh(); return result; }
+  async upgradeLegacyExperiment(item, project) { const result = await upgradeLegacyExperimentAndAssign(this.app, item.file, project); await this.researchDatabase.refresh(); return result; }
   openCompoundModal() { new CompoundModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openDataAssetModal() { new DataAssetModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openMigrationModal() { new MigrationModal(this.app, this.plugin, { onCompleted: async () => { await this.refresh(); } }).open(); }
@@ -570,8 +597,13 @@ class WorkbenchView extends ItemView {
   }
 
   _renderProjectPage(title) {
-    this.renderPageHeader(title, '课题、实验与数据的关系入口', { label: '+ 新增课题', onClick: () => this.openProjectModal() });
     const formal = this.entityStore.listProjects();
+    if (this.selectedProjectId) {
+      const selected = formal.find((item) => item.id === this.selectedProjectId);
+      if (selected) return void projectHubUi.renderProjectHub(this, selected);
+      this.selectedProjectId = '';
+    }
+    this.renderPageHeader(title, '课题、实验与数据的关系入口', { label: '+ 新增课题', onClick: () => this.openProjectModal() });
     const items = formal.length ? formal : this.filteredFiles(this.readOnlyItems(PROJECT_FOLDER, 30, true));
     const grid = this.pageEl.createDiv({ cls: 'phdcc-project-grid' });
     if (!items.length) return void grid.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配项目' : '暂无项目；可从原工作台的课题模板开始创建。' });
@@ -580,7 +612,7 @@ class WorkbenchView extends ItemView {
       const info = item.file ? { ...this.fileInfo(item.file), title: item.title, status: item.status, nextAction: item.nextAction, projectId: item.id } : this.fileInfo(file);
       const card = grid.createDiv({ cls: 'phdcc-project-card' });
       const heading = card.createDiv({ cls: 'phdcc-project-title', text: info.title });
-      heading.addEventListener('click', () => { void this.openFile(file); });
+      heading.addEventListener('click', () => { if (item.id) { this.selectedProjectId = item.id; this.renderPage(); } else void this.openFile(file); });
       const metadata = [info.status && `状态：${info.status}`, info.priority && `优先级：${info.priority}`, info.stage && `阶段：${info.stage}`].filter(Boolean);
       card.createDiv({ cls: 'phdcc-project-meta', text: metadata.join(' · ') || info.path });
       if (info.nextAction) card.createDiv({ cls: 'phdcc-project-next', text: `下一步：${info.nextAction}` });

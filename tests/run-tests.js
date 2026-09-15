@@ -33,6 +33,7 @@ const { filterCompoundsByProject, suggestProjectFromCompound } = require('../plu
 const { reconcileRelations } = require('../plugin/lib/nmr-archive-modal');
 const { validateDataAssetRelations } = require('../plugin/lib/modals/data-asset-modal');
 const { EntityStore } = require('../plugin/lib/entities/store');
+const { projectRelations, unassignedExperiments, suggestProjectForExperiment, updateExperimentProject, batchAssignExperiments, upgradeLegacyExperimentAndAssign } = require('../plugin/lib/entities/project-relations');
 const { WorkQueueStore, MAX_SCAN_FILES, MAX_SCAN_NODES, platformError, summarizeEntry } = require('../plugin/lib/work-queue');
 Module._load = originalLoad;
 
@@ -175,6 +176,37 @@ test('relationship conflicts are reported only when both sides are explicit', ()
   assert.ok(conflict.issues.some((issue) => issue.type === 'relation_conflict'));
   const missing = database.validateRelationships([{ id: 'DATA-C', type: 'data-asset', path: 'd.md', experimentId: 'EXP-MISSING' }]);
   assert.strictEqual(missing.issues.filter((issue) => issue.type === 'relation_conflict').length, 0);
+});
+
+test('project relations aggregate by permanent project ID and provide deterministic suggestions', () => {
+  const projectA = { id: 'PROJ-A', title: '同名课题' }; const projectB = { id: 'PROJ-B', title: '同名课题' };
+  const experiments = [{ id: 'EXP-A', title: 'A', projectId: 'PROJ-A' }, { id: 'EXP-B', title: 'B', projectId: 'PROJ-B' }, { id: 'EXP-U', title: 'U', projectId: '' }];
+  const compounds = [{ id: 'CMP-A', title: 'C', projectId: 'PROJ-A' }];
+  const store = { getById: (id) => [projectA, projectB].find((item) => item.id === id) || null, listProjects: () => [projectA, projectB], listExperiments: () => experiments, listCompounds: () => compounds, listDataAssets: () => [] , list: (kind) => kind === 'experiment' ? experiments : [] };
+  const grouped = projectRelations(store, { records: [{ type: 'task', id: 'TASK-1', projectId: 'PROJ-A' }] }, 'PROJ-A');
+  assert.deepStrictEqual(grouped.experiments.map((item) => item.id), ['EXP-A']);
+  assert.strictEqual(unassignedExperiments(store).map((item) => item.id).join(','), 'EXP-U');
+  const suggestion = suggestProjectForExperiment({ id: 'EXP-U', compoundId: 'CMP-A' }, compounds, [projectA, projectB]);
+  assert.strictEqual(suggestion.projectId, 'PROJ-A'); assert.strictEqual(suggestion.strength, 'strong');
+});
+
+test('experiment relation writes are TOCTOU checked and read-back verified', async () => {
+  const file = { path: '00-博士工作台/03-实验/e.md' }; const frontmatter = { kind: 'experiment', record_id: 'EXP-1', project_id: '', project: '' };
+  const app = { metadataCache: { getFileCache: () => ({ frontmatter }) }, fileManager: { async processFrontMatter(target, callback) { assert.strictEqual(target, file); callback(frontmatter); } } };
+  const project = { id: 'PROJ-A', title: '课题 A', file: { path: '00-博士工作台/02-课题/a.md' } };
+  const result = await updateExperimentProject(app, file, project, { expectedId: 'EXP-1', expectedProjectId: '' });
+  assert.strictEqual(result.status, 'success'); assert.strictEqual(frontmatter.project_id, 'PROJ-A'); assert.strictEqual(frontmatter.project, '课题 A');
+  frontmatter.project_id = 'PROJ-B'; const skipped = await updateExperimentProject(app, file, project, { expectedId: 'EXP-1', expectedProjectId: '' });
+  assert.strictEqual(skipped.status, 'skipped');
+});
+
+test('batch project relation reports partial failures and legacy upgrade keeps order', async () => {
+  const files = [{ path: 'e1.md' }, { path: 'e2.md' }]; const data = new Map(files.map((file) => [file, { kind: 'experiment', record_id: file === files[0] ? 'EXP-1' : 'BAD-2', project_id: '', project: '' }]));
+  const app = { metadataCache: { getFileCache: (file) => ({ frontmatter: data.get(file) }) }, fileManager: { async processFrontMatter(file, callback) { if (!data.has(file)) throw new Error('missing'); callback(data.get(file)); } } };
+  const project = { id: 'PROJ-A', title: 'A' }; const result = await batchAssignExperiments(app, [{ file: files[0], id: 'EXP-1', projectId: '' }, { file: files[1], id: 'BAD-2', projectId: '' }], project);
+  assert.strictEqual(result.status, 'partial_failure'); assert.strictEqual(result.success.length, 1); assert.strictEqual(result.failed.length, 1);
+  const legacy = { path: 'legacy.md' }; const legacyFm = { kind: 'experiment', title: 'Legacy', record_id: '' }; data.set(legacy, legacyFm);
+  const upgraded = await upgradeLegacyExperimentAndAssign(app, legacy, project); assert.strictEqual(upgraded.status, 'success'); assert.match(legacyFm.record_id, /^EXP-/); assert.strictEqual(legacyFm.project_id, 'PROJ-A');
 });
 
 function entityApp() {
