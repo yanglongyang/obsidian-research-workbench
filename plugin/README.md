@@ -1,6 +1,6 @@
 # 科研工作台（Obsidian 插件）
 
-本地优先的科研信息系统（当前版本 `0.6.1`）。Markdown 是事实来源，`records.json` 是可重建的派生索引，NMR JSONL 是操作审计记录。
+本地优先的科研信息系统（当前版本 `0.6.2`）。Markdown 是事实来源，`records.json` 是可重建的派生索引，NMR JSONL 是操作审计记录。
 
 ## 主要功能
 
@@ -17,6 +17,7 @@
 - 普通“新增数据资产”入口不提供 standalone NMR 类型；NMR 原始数据应从“待解核磁 → 归档”进入台账。台账同时保存关系 ID、标题、采集时间、来源修改时间和归档时间，并兼容读取旧版七列表格；归档流程不会把文件系统 mtime 冒充采集时间。
 - 关系检查覆盖缺失目标、错误类型、Legacy ID、重复 ID、自引用和关系冲突。
 - Legacy ID 迁移只写入缺失的 `record_id`，不会修改标题、标签、路径或关系文本。
+- 化合物注册表以结构式为首列，支持 `structure_preview` 显式路径与成对的 `CD-*-preview.png`/`CD-*-source.cdx` 保守回退识别；不接管 ChemDraw Paste 的交互。
 
 ## 设置
 

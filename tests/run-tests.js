@@ -35,6 +35,7 @@ const { validateDataAssetRelations } = require('../plugin/lib/modals/data-asset-
 const { EntityStore } = require('../plugin/lib/entities/store');
 const { projectRelations, unassignedExperiments, suggestProjectForExperiment, updateExperimentProject, batchAssignExperiments, upgradeLegacyExperimentAndAssign } = require('../plugin/lib/entities/project-relations');
 const { WorkQueueStore, MAX_SCAN_FILES, MAX_SCAN_NODES, platformError, summarizeEntry } = require('../plugin/lib/work-queue');
+const { resolveCompoundStructure, naturalCompoundSort, countCompoundRelations, renderCompoundRegistry } = require('../plugin/lib/ui/compound-registry');
 Module._load = originalLoad;
 
 const tests = [];
@@ -164,6 +165,82 @@ test('EntityStore preserves experiment sample metadata', () => {
   assert.strictEqual(new EntityStore(plugin).list('experiment')[0].sample, 'YLY-145');
 });
 
+test('compound registry resolves explicit structure_preview and reports broken links', () => {
+  const preview = { path: 'Assets/CD-CMP-1-preview.png' };
+  const source = { path: 'Assets/CD-CMP-1-source.cdx' };
+  const files = new Map([[preview.path, preview], [source.path, source]]);
+  const app = { vault: { getAbstractFileByPath: (value) => files.get(value) || null }, metadataCache: { getFirstLinkpathDest: (value) => files.get(value) || null } };
+  const compound = { file: { path: '00-博士工作台/04-化合物/CMP-1.md' }, structurePreview: preview.path };
+  assert.deepStrictEqual(resolveCompoundStructure(app, compound), { status: 'resolved', previewPath: preview.path, candidates: [preview.path] });
+  assert.strictEqual(resolveCompoundStructure(app, { ...compound, structurePreview: 'Assets/missing.png' }).status, 'broken');
+});
+
+test('compound registry fallback only accepts paired managed ChemDraw previews', () => {
+  const previewA = { path: 'Assets/CD-CMP-1-preview.png' }; const sourceA = { path: 'Assets/CD-CMP-1-source.cdx' };
+  const previewB = { path: 'Assets/CD-CMP-2-preview.png' }; const sourceB = { path: 'Assets/CD-CMP-2-source.cdx' };
+  const ordinary = { path: 'Assets/photo.png' }; const unpaired = { path: 'Assets/CD-CMP-3-preview.png' };
+  const files = new Map([previewA, sourceA, previewB, sourceB, ordinary, unpaired].map((file) => [file.path, file]));
+  const app = { vault: { getAbstractFileByPath: (value) => files.get(value) || null }, metadataCache: { getFirstLinkpathDest: (value) => files.get(value) || null, getFileCache: () => ({ embeds: [] }) } };
+  const resolve = (links) => { app.metadataCache.getFileCache = () => ({ embeds: links.map((link) => ({ link })) }); return resolveCompoundStructure(app, { file: { path: '00-博士工作台/04-化合物/CMP.md' }, structurePreview: '' }); };
+  assert.strictEqual(resolve([]).status, 'missing');
+  assert.strictEqual(resolve(['Assets/photo.png', 'Assets/CD-CMP-3-preview.png']).status, 'missing');
+  assert.deepStrictEqual(resolve(['Assets/CD-CMP-1-preview.png']).previewPath, previewA.path);
+  assert.strictEqual(resolve(['Assets/CD-CMP-1-preview.png', 'Assets/CD-CMP-2-preview.png']).status, 'ambiguous');
+});
+
+test('compound registry sorts compound codes naturally and case-insensitively', () => {
+  const sorted = naturalCompoundSort([{ compoundCode: 'CMP-10' }, { compoundCode: 'CMP-2' }, { compoundCode: 'cmp-1' }]);
+  assert.deepStrictEqual(sorted.map((item) => item.compoundCode), ['cmp-1', 'CMP-2', 'CMP-10']);
+});
+
+test('compound registry renderer exposes image data-path and explicit empty states', () => {
+  const makeElement = (tag = 'div', options = {}) => {
+    const element = { tag, children: [], className: options.cls || '', text: options.text || '', attrs: options.attr || {}, listeners: {}, style: {}, setAttr(name, value) { this.attrs[name] = value; }, addEventListener(name, handler) { this.listeners[name] = handler; }, createDiv(child = {}) { const next = makeElement('div', child); this.children.push(next); return next; }, createEl(nextTag, child = {}) { const next = makeElement(nextTag, child); this.children.push(next); return next; } };
+    return element;
+  };
+  const preview = { path: 'Assets/CD-CMP-1-preview.png', stat: { mtime: 1 } }; const source = { path: 'Assets/CD-CMP-1-source.cdx' };
+  const files = new Map([[preview.path, preview], [source.path, source]]);
+  const view = { pageEl: makeElement(), app: { vault: { getAbstractFileByPath: (value) => files.get(value) || null, getResourcePath: (file) => `app://local/${file.path}`, on: () => ({}) }, metadataCache: { getFirstLinkpathDest: (value) => files.get(value) || null, getFileCache: (file) => file.path.endsWith('one.md') ? { embeds: [{ link: preview.path }] } : file.path.endsWith('many.md') ? { embeds: [{ link: preview.path }, { link: 'Assets/CD-CMP-2-preview.png' }] } : { embeds: [] } } }, registerEvent: () => {}, openFile: () => {} };
+  const root = renderCompoundRegistry(view, [{ file: { path: 'one.md' }, id: 'CMP-1', compoundCode: 'CMP-1', title: 'One', smiles: 'CCO', structurePreview: preview.path }, { file: { path: 'empty.md' }, id: 'CMP-2', compoundCode: 'CMP-2', title: 'Empty', structurePreview: '' }]);
+  const image = root.children.find((child) => child.className.includes('phdcc-compound-row')).children[0].children[0];
+  assert.strictEqual(image.attrs['data-path'], preview.path);
+  assert.ok(root.children.some((row) => row.className.includes('phdcc-compound-row')));
+  const rows = root.children.filter((child) => child.className.includes('phdcc-compound-row'));
+  assert.strictEqual(rows[0].children[4].children[0].disabled, undefined);
+  assert.strictEqual(rows[1].children[4].children[0].disabled, true);
+  assert.strictEqual(rows[1].children[4].children[0].attrs.title, '未填写 SMILES');
+  assert.strictEqual(rows[1].children[0].children[0].text, '未添加结构式');
+});
+
+test('compound relation counts only include experiment and data-asset records', () => {
+  const result = countCompoundRelations([
+    { type: 'experiment', compoundId: 'CMP-1' },
+    { type: 'data-asset', compoundId: 'CMP-1' },
+    { type: 'task', compoundId: 'CMP-1' },
+    { type: 'note', compoundId: 'CMP-2' }
+  ]);
+  assert.strictEqual(result.experimentCounts.get('CMP-1'), 1);
+  assert.strictEqual(result.dataAssetCounts.get('CMP-1'), 1);
+  assert.strictEqual(result.experimentCounts.has('CMP-2'), false);
+  assert.strictEqual(result.dataAssetCounts.has('CMP-2'), false);
+});
+
+test('compound preview modify listener refreshes only matching images', () => {
+  const makeElement = (tag = 'div', options = {}) => {
+    const element = { tag, children: [], className: options.cls || '', text: options.text || '', attrs: options.attr || {}, listeners: {}, style: {}, setAttr(name, value) { this.attrs[name] = value; }, addEventListener(name, handler) { this.listeners[name] = handler; }, createDiv(child = {}) { const next = makeElement('div', child); this.children.push(next); return next; }, createEl(nextTag, child = {}) { const next = makeElement(nextTag, child); this.children.push(next); return next; } };
+    return element;
+  };
+  const files = new Map(); const previewA = { path: 'Assets/CD-A-preview.png', stat: { mtime: 1 } }; const sourceA = { path: 'Assets/CD-A-source.cdx' }; const previewB = { path: 'Assets/CD-B-preview.png', stat: { mtime: 1 } }; const sourceB = { path: 'Assets/CD-B-source.cdx' };
+  [previewA, sourceA, previewB, sourceB].forEach((file) => files.set(file.path, file));
+  let modifyHandler;
+  const view = { pageEl: makeElement(), app: { vault: { getAbstractFileByPath: (value) => files.get(value) || null, getResourcePath: (file) => `app://${file.path}`, on: (_event, handler) => { modifyHandler = handler; return {}; } }, metadataCache: { getFirstLinkpathDest: (value) => files.get(value) || null, getFileCache: () => ({ embeds: [] }) } }, registerEvent: () => {}, openFile: () => {} };
+  const root = renderCompoundRegistry(view, [{ file: { path: 'a.md' }, id: 'CMP-A', compoundCode: 'CMP-A', title: 'A', structurePreview: previewA.path }, { file: { path: 'b.md' }, id: 'CMP-B', compoundCode: 'CMP-B', title: 'B', structurePreview: previewB.path }]);
+  const rows = root.children.filter((child) => child.className.includes('phdcc-compound-row'));
+  const imageA = rows[0].children[0].children[0]; const imageB = rows[1].children[0].children[0]; const beforeB = imageB.src;
+  previewA.stat.mtime = 2; modifyHandler(previewA);
+  assert.match(imageA.src, /mtime=2/); assert.strictEqual(imageB.src, beforeB);
+});
+
 test('relationship conflicts are reported only when both sides are explicit', () => {
   const consistent = database.validateRelationships([
     { id: 'PROJ-A', type: 'project', path: 'p.md' },
@@ -247,6 +324,7 @@ test('project, compound and data asset creation writes typed Markdown entities',
   const asset = await createDataAsset(app, { title: 'NMR', assetType: 'nmr', dataPath: 'E:/nmr', projectId: 'PROJ-TEST', experimentId: 'EXP-TEST', compoundId: 'CMP-TEST' }, id);
   assert.match(project.path, /02-课题/); assert.match(project.content, /kind: project/); assert.match(project.content, /record_id: "PROJ-TEST"/);
   assert.match(compound.path, /04-化合物/); assert.match(compound.content, /kind: compound/);
+  assert.match(compound.content, /structure_preview: ""/); assert.match(compound.content, /## 结构式/);
   assert.match(asset.file.path, /04-数据资产/); assert.match(asset.file.content, /asset_type: "nmr"/); assert.match(asset.file.content, /created_via: "data-asset-modal"/);
   await assert.rejects(() => createProject(app, {}, id));
   await assert.rejects(() => createCompound(app, {}, id));

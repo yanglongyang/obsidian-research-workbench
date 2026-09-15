@@ -729,6 +729,7 @@ function renderCompoundContent(compound) {
     `smiles: ${yamlString(compound.smiles)}`,
     `formula: ${yamlString(compound.formula)}`,
     `molecular_weight: ${yamlString(compound.molecularWeight)}`,
+    `structure_preview: ${yamlString(compound.structurePreview)}`,
     `status: ${yamlString(compound.status || 'active')}`,
     `created: ${yamlString(compound.created)}`,
     `updated: ${yamlString(compound.updated)}`,
@@ -745,6 +746,10 @@ function renderCompoundContent(compound) {
     '',
     compound.notes || '',
     '',
+    '## 结构式',
+    '',
+    '从 ChemDraw 复制结构式并在此处粘贴。',
+    '',
     '## 合成记录',
     '',
     '## 表征',
@@ -757,7 +762,7 @@ async function createCompound(app, input, generateRecordId) {
   if (!compoundCode) throw new Error('请输入化合物编号');
   await ensureFolder(app.vault, COMPOUND_FOLDER);
   const now = new Date().toISOString();
-  const compound = { recordId: generateRecordId('CMP'), compoundCode, name: String(input.name || '').trim(), projectId: String(input.projectId || '').trim(), project: String(input.project || '').trim(), smiles: String(input.smiles || '').trim(), formula: String(input.formula || '').trim(), molecularWeight: String(input.molecularWeight || '').trim(), status: String(input.status || 'active'), notes: String(input.notes || '').trim(), created: now, updated: now };
+  const compound = { recordId: generateRecordId('CMP'), compoundCode, name: String(input.name || '').trim(), projectId: String(input.projectId || '').trim(), project: String(input.project || '').trim(), smiles: String(input.smiles || '').trim(), formula: String(input.formula || '').trim(), molecularWeight: String(input.molecularWeight || '').trim(), structurePreview: String(input.structurePreview || '').trim(), status: String(input.status || 'active'), notes: String(input.notes || '').trim(), created: now, updated: now };
   return app.vault.create(buildCompoundPath(app.vault, compoundCode), renderCompoundContent(compound));
 }
 module.exports = { COMPOUND_FOLDER, buildCompoundPath, renderCompoundContent, createCompound };
@@ -1071,6 +1076,7 @@ class EntityStore {
       kind,
       id: text(frontmatter.record_id),
       title: text(frontmatter.title) || file.basename,
+      name: text(frontmatter.name),
       projectId: text(frontmatter.project_id),
       project: text(frontmatter.project),
       experimentId: text(frontmatter.experiment_id),
@@ -1078,6 +1084,10 @@ class EntityStore {
       compoundId: text(frontmatter.compound_id),
       compound: text(frontmatter.compound),
       compoundCode: text(frontmatter.compound_code),
+      structurePreview: text(frontmatter.structure_preview),
+      smiles: text(frontmatter.smiles),
+      formula: text(frontmatter.formula),
+      molecularWeight: text(frontmatter.molecular_weight),
       assetType: text(frontmatter.asset_type),
       status: text(frontmatter.status),
       stage: text(frontmatter.stage),
@@ -1214,6 +1224,7 @@ module.exports = { permanentExperiments, projectRelations, unassignedExperiments
 },
 "./lib/ui/project-hub": function (module, exports, require) {
 const { projectRelations, suggestProjectForExperiment } = require('./lib/entities/project-relations');
+const compoundRegistryUi = require('./lib/ui/compound-registry');
 
 const STATUS_LABELS = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻' };
 function dateOf(item) { return String(item.experimentDate || item.date || item.updated || item.file?.stat?.mtime || '').slice(0, 10); }
@@ -1253,7 +1264,7 @@ function renderProjectHub(view, project) {
   const experiments = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-hub-section' }); sections.experiments = experiments; experiments.style.display = activeTab === 'experiments' ? '' : 'none'; experiments.createEl('h3', { text: '实验' });
   ['全部', 'doing', 'complete', 'blocked'].forEach((status) => { const chip = experiments.createEl('button', { cls: 'phdcc-filter-chip', text: status === '全部' ? '全部' : STATUS_LABELS[status], attr: { type: 'button' } }); chip.addEventListener('click', () => { experiments.querySelectorAll('.phdcc-experiment-row').forEach((row) => { row.style.display = status === '全部' || row.dataset.status === status ? '' : 'none'; }); }); });
   sortRecent(relation.experiments).forEach((item) => renderExperimentItem(view, experiments, item, project));
-  const compounds = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-hub-section' }); sections.compounds = compounds; compounds.style.display = activeTab === 'compounds' ? '' : 'none'; compounds.createEl('h3', { text: '化合物' }); relation.compounds.forEach((item) => { const row = compounds.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: `${item.compoundCode || item.title} · ${item.title}` }); if (item.file) makeInteractive(title, () => void view.openFile(item.file)); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.id} · 关联实验 ${relation.experiments.filter((exp) => exp.compoundId === item.id).length} 个 · 关联数据 ${relation.dataAssets.filter((asset) => asset.compoundId === item.id).length} 个` }); });
+  const compounds = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-hub-section' }); sections.compounds = compounds; compounds.style.display = activeTab === 'compounds' ? '' : 'none'; compounds.createEl('h3', { text: '化合物' }); compoundRegistryUi.renderCompoundRegistry(view, relation.compounds, { container: compounds.createDiv({ cls: 'phdcc-compound-registry' }) });
   const assets = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-hub-section' }); sections.data = assets; assets.style.display = activeTab === 'data' ? '' : 'none'; assets.createEl('h3', { text: '数据资产' }); relation.dataAssets.forEach((item) => { const row = assets.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: `${item.assetType || '数据'} · ${item.title}` }); if (item.file) makeInteractive(title, () => void view.openFile(item.file)); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.id} · ${item.dataPath || '无路径'}${item.experimentId ? ` · ${item.experimentId}` : ''}${item.compoundId ? ` · ${item.compoundId}` : ''}` }); });
   const timeline = view.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-hub-section' }); sections.timeline = timeline; timeline.style.display = activeTab === 'timeline' ? '' : 'none'; timeline.createEl('h3', { text: 'Project Timeline' });
   const events = [...relation.experiments.map((item) => ({ file: item.file, date: dateOf(item), id: item.id, title: item.title, status: item.status })), ...relation.dataAssets.map((item) => ({ file: item.file, date: dateOf(item), id: item.id, title: item.title, status: item.assetType || '数据资产' })), ...relation.tasks.map((item) => ({ file: item.file, date: item.date || item.updated, id: item.id, title: item.title, status: item.status }))].sort((a, b) => String(b.date).localeCompare(String(a.date)));
@@ -1298,6 +1309,143 @@ function renderUnassignedExperiments(view) {
 }
 
 module.exports = { renderUnassignedExperiments };
+
+},
+"./lib/ui/compound-registry": function (module, exports, require) {
+const { Notice } = require('obsidian');
+
+function cleanLink(link) {
+  return String(link || '').split('#')[0].split('|')[0].trim();
+}
+
+function resolvePath(app, link, sourcePath) {
+  if (!link) return null;
+  if (typeof app?.metadataCache?.getFirstLinkpathDest === 'function') return app.metadataCache.getFirstLinkpathDest(link, sourcePath || '') || null;
+  return app?.vault?.getAbstractFileByPath?.(link) || null;
+}
+
+function isManagedPreviewPath(file) {
+  return Boolean(file?.path && /(^|\/)CD-[^/]+-preview\.png$/i.test(file.path));
+}
+
+function pairedSourceExists(app, previewFile) {
+  const sourcePath = previewFile.path.replace(/-preview\.png$/i, '-source.cdx');
+  return Boolean(app?.vault?.getAbstractFileByPath?.(sourcePath));
+}
+
+function resolveCompoundStructure(app, compound) {
+  const explicit = cleanLink(compound?.structurePreview);
+  if (explicit) {
+    const file = resolvePath(app, explicit, compound?.file?.path);
+    return file ? { status: 'resolved', previewPath: file.path, candidates: [file.path] } : { status: 'broken', previewPath: explicit, candidates: [] };
+  }
+  const cache = compound?.file && app?.metadataCache?.getFileCache?.(compound.file);
+  const candidates = [...new Set((cache?.embeds || []).map((embed) => resolvePath(app, cleanLink(embed.link), compound.file.path)).filter((file) => isManagedPreviewPath(file) && pairedSourceExists(app, file)).map((file) => file.path))];
+  if (candidates.length === 0) return { status: 'missing', previewPath: '', candidates };
+  if (candidates.length > 1) return { status: 'ambiguous', previewPath: '', candidates };
+  return { status: 'resolved', previewPath: candidates[0], candidates };
+}
+
+function naturalCompoundSort(items) {
+  return [...(items || [])].sort((a, b) => String(a.compoundCode || a.title || '').localeCompare(String(b.compoundCode || b.title || ''), undefined, { numeric: true, sensitivity: 'base' }));
+}
+
+function countCompoundRelations(records) {
+  const experimentCounts = new Map();
+  const dataAssetCounts = new Map();
+  (records || []).forEach((record) => {
+    if (!record?.compoundId) return;
+    const target = record.type === 'experiment' ? experimentCounts : record.type === 'data-asset' ? dataAssetCounts : null;
+    if (target) target.set(record.compoundId, (target.get(record.compoundId) || 0) + 1);
+  });
+  return { experimentCounts, dataAssetCounts };
+}
+
+function resourcePath(app, file) {
+  if (typeof app?.vault?.getResourcePath === 'function') return app.vault.getResourcePath(file);
+  if (typeof app?.vault?.adapter?.getResourcePath === 'function') return app.vault.adapter.getResourcePath(file.path);
+  return file?.path || '';
+}
+
+async function copySmiles(compound) {
+  const smiles = String(compound?.smiles || '').trim();
+  if (!smiles) return;
+  try {
+    if (!globalThis.navigator?.clipboard?.writeText) throw new Error('clipboard unavailable');
+    await globalThis.navigator.clipboard.writeText(smiles);
+    new Notice('SMILES 已复制');
+  } catch (error) {
+    new Notice('SMILES 复制失败');
+  }
+}
+
+function makeInteractive(element, handler) {
+  element.setAttr('role', 'button'); element.setAttr('tabindex', '0'); element.addEventListener('click', handler);
+  element.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handler(event); } });
+  return element;
+}
+
+function renderStructureCell(view, row, compound, resolution) {
+  const cell = row.createDiv({ cls: 'phdcc-compound-cell phdcc-compound-structure' });
+  if (resolution.status === 'resolved') {
+    const file = view.app.vault.getAbstractFileByPath(resolution.previewPath);
+    if (!file) return void cell.createDiv({ cls: 'phdcc-compound-placeholder is-broken', text: '结构文件缺失' });
+    const image = cell.createEl('img', { cls: 'phdcc-compound-structure-image', attr: { alt: `${compound.compoundCode || compound.title} structure`, 'data-path': file.path } });
+    image.src = `${resourcePath(view.app, file)}${file.stat?.mtime ? `?mtime=${file.stat.mtime}` : ''}`;
+    image.addEventListener('error', () => { image.remove(); cell.createDiv({ cls: 'phdcc-compound-placeholder is-broken', text: '结构文件缺失' }); });
+    if (!view.compoundPreviewImages) view.compoundPreviewImages = new Map();
+    if (!view.compoundPreviewImages.has(file.path)) view.compoundPreviewImages.set(file.path, new Set());
+    view.compoundPreviewImages.get(file.path).add(image);
+    return;
+  }
+  const text = resolution.status === 'ambiguous' ? '检测到多个结构式' : resolution.status === 'broken' ? '结构文件缺失' : '未添加结构式';
+  const placeholder = cell.createDiv({ cls: `phdcc-compound-placeholder is-${resolution.status}`, text });
+  if (resolution.status === 'ambiguous') placeholder.createDiv({ cls: 'phdcc-compound-placeholder-detail', text: '请在 frontmatter 指定 structure_preview' });
+}
+
+function installPreviewListener(view) {
+  if (view.compoundPreviewListenerInstalled || !view.app?.vault?.on || typeof view.registerEvent !== 'function') return;
+  view.compoundPreviewListenerInstalled = true;
+  view.registerEvent(view.app.vault.on('modify', (file) => {
+    const images = view.compoundPreviewImages?.get(file?.path);
+    if (!images?.size) return;
+    const src = `${resourcePath(view.app, file)}${file.stat?.mtime ? `?mtime=${file.stat.mtime}` : ''}`;
+    images.forEach((image) => { image.src = src; });
+  }));
+}
+
+function renderCompoundRegistry(view, compounds, options = {}) {
+  // Re-rendering replaces the DOM; keep the modify listener scoped to the
+  // images currently visible in this registry rather than retaining stale
+  // nodes from previous pages/tabs.
+  view.compoundPreviewImages = new Map();
+  installPreviewListener(view);
+  const items = naturalCompoundSort(compounds);
+  const root = options.container || view.pageEl.createDiv({ cls: 'phdcc-compound-registry' });
+  const header = root.createDiv({ cls: 'phdcc-compound-header', attr: { role: 'row' } });
+  ['结构式', '化合物', '相关课题', '分子量', '操作'].forEach((label) => header.createDiv({ cls: 'phdcc-compound-cell', text: label }));
+  items.forEach((compound) => {
+    const row = root.createDiv({ cls: 'phdcc-compound-row', attr: { role: 'row' } });
+    const resolution = resolveCompoundStructure(view.app, compound);
+    renderStructureCell(view, row, compound, resolution);
+    const identity = row.createDiv({ cls: 'phdcc-compound-cell phdcc-compound-identity' });
+    const code = identity.createDiv({ cls: 'phdcc-compound-code', text: compound.compoundCode || compound.title });
+    makeInteractive(code, () => void view.openFile(compound.file));
+    identity.createDiv({ cls: 'phdcc-record-id', text: compound.id });
+    const project = row.createDiv({ cls: `phdcc-compound-cell phdcc-compound-project${compound.project ? '' : ' is-muted'}`, text: compound.project || '未归属课题' });
+    const molecularWeight = row.createDiv({ cls: `phdcc-compound-cell phdcc-compound-molecular-weight${compound.molecularWeight ? '' : ' is-muted'}`, text: compound.molecularWeight || '—' });
+    const actions = row.createDiv({ cls: 'phdcc-compound-cell phdcc-compound-actions' });
+    const copy = actions.createEl('button', { cls: 'phdcc-row-action phdcc-copy-smiles', text: '复制 SMILES', attr: { type: 'button', title: compound.smiles ? '复制 SMILES' : '未填写 SMILES' } });
+    if (!compound.smiles) copy.disabled = true;
+    copy.addEventListener('click', () => void copySmiles(compound));
+    const open = actions.createEl('button', { cls: 'phdcc-row-action', text: '打开', attr: { type: 'button' } });
+    open.addEventListener('click', () => void view.openFile(compound.file));
+  });
+  if (!items.length) root.createDiv({ cls: 'phdcc-compound-placeholder', text: '暂无化合物记录' });
+  return root;
+}
+
+module.exports = { resolveCompoundStructure, naturalCompoundSort, countCompoundRelations, renderCompoundRegistry, resourcePath, copySmiles };
 
 },
 "./lib/migrations/permanent-id": function (module, exports, require) {
@@ -3063,6 +3211,7 @@ const { NmrLedgerMigrationModal } = require('./lib/modals/nmr-ledger-migration-m
 const { projectRelations, unassignedExperiments, suggestProjectForExperiment, updateExperimentProject, batchAssignExperiments, upgradeLegacyExperimentAndAssign } = require('./lib/entities/project-relations');
 const projectHubUi = require('./lib/ui/project-hub');
 const unassignedUi = require('./lib/ui/unassigned-experiments');
+const compoundRegistryUi = require('./lib/ui/compound-registry');
 const pageRenderers = require('./lib/ui/page-renderers');
 
 const VIEW_TYPE = 'phd-command-center-view';
@@ -3667,18 +3816,10 @@ class WorkbenchView extends ItemView {
   }
 
   _renderCompoundPage() {
-    this.renderPageHeader('化合物', '化合物是实验与数据资产的稳定关联节点', { label: '+ 新增化合物', onClick: () => this.openCompoundModal() });
-    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-entity-list' });
-    const items = this.entityStore.listCompounds().filter((item) => !this.searchQuery || `${item.title} ${item.compoundCode} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
-    if (!items.length) return void card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配化合物' : '暂无化合物' });
-    items.forEach((item) => {
-      const row = card.createDiv({ cls: 'phdcc-file-row' });
-      const title = row.createDiv({ cls: 'phdcc-file-title', text: `${item.compoundCode || item.title} · ${item.title}` });
-      makeInteractive(title, () => { void this.openFile(item.file); });
-      row.createDiv({ cls: 'phdcc-file-meta', text: `${item.project || '未关联课题'} · ${item.id}` });
-      const counts = this.researchDatabase.records.filter((record) => record.compoundId === item.id);
-      row.createDiv({ cls: 'phdcc-file-next', text: `关联记录：${counts.length}` });
-    });
+    this.renderPageHeader('化合物', 'Compound Registry · 结构式优先的科学目录', { label: '+ 新增化合物', onClick: () => this.openCompoundModal() });
+    const query = this.searchQuery.trim().toLowerCase();
+    const items = this.entityStore.listCompounds().filter((item) => !query || `${item.title} ${item.name || ''} ${item.compoundCode} ${item.id} ${item.project} ${item.formula}`.toLowerCase().includes(query));
+    compoundRegistryUi.renderCompoundRegistry(this, items);
   }
 
   _renderIntegrityPage() {

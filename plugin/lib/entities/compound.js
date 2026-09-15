@@ -33,6 +33,7 @@ function renderCompoundContent(compound) {
     `smiles: ${yamlString(compound.smiles)}`,
     `formula: ${yamlString(compound.formula)}`,
     `molecular_weight: ${yamlString(compound.molecularWeight)}`,
+    `structure_preview: ${yamlString(compound.structurePreview)}`,
     `status: ${yamlString(compound.status || 'active')}`,
     `created: ${yamlString(compound.created)}`,
     `updated: ${yamlString(compound.updated)}`,
@@ -49,6 +50,10 @@ function renderCompoundContent(compound) {
     '',
     compound.notes || '',
     '',
+    '## 结构式',
+    '',
+    '从 ChemDraw 复制结构式并在此处粘贴。',
+    '',
     '## 合成记录',
     '',
     '## 表征',
@@ -61,7 +66,7 @@ async function createCompound(app, input, generateRecordId) {
   if (!compoundCode) throw new Error('请输入化合物编号');
   await ensureFolder(app.vault, COMPOUND_FOLDER);
   const now = new Date().toISOString();
-  const compound = { recordId: generateRecordId('CMP'), compoundCode, name: String(input.name || '').trim(), projectId: String(input.projectId || '').trim(), project: String(input.project || '').trim(), smiles: String(input.smiles || '').trim(), formula: String(input.formula || '').trim(), molecularWeight: String(input.molecularWeight || '').trim(), status: String(input.status || 'active'), notes: String(input.notes || '').trim(), created: now, updated: now };
+  const compound = { recordId: generateRecordId('CMP'), compoundCode, name: String(input.name || '').trim(), projectId: String(input.projectId || '').trim(), project: String(input.project || '').trim(), smiles: String(input.smiles || '').trim(), formula: String(input.formula || '').trim(), molecularWeight: String(input.molecularWeight || '').trim(), structurePreview: String(input.structurePreview || '').trim(), status: String(input.status || 'active'), notes: String(input.notes || '').trim(), created: now, updated: now };
   return app.vault.create(buildCompoundPath(app.vault, compoundCode), renderCompoundContent(compound));
 }
 module.exports = { COMPOUND_FOLDER, buildCompoundPath, renderCompoundContent, createCompound };

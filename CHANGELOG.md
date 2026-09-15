@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.2 — Compound Registry
+
+- 化合物页与 Project Hub 化合物页统一为结构式优先的高密度科学目录，支持代码、名称、项目、分子式和分子量检索，并按化合物编号自然排序。
+- 新增只读结构解析：优先读取 `structure_preview`，未指定时仅识别同目录成对的 `CD-*-preview.png` 与 `CD-*-source.cdx`；缺失、歧义和断链会明确显示。
+- 结构预览使用 Vault resource path 并监听当前页面图片的修改事件；不复制文件、不迁移数据、不注册 ChemDraw 双击或右键交互。
+- 新建化合物模板增加 `structure_preview` 与“结构式”说明；无数据 schema 迁移，关系与其它科研流程保持不变。
+
 ## 0.6.1 — Visual Redesign / Modern Workspace
 
 - 重做 Modern Scientific Command Center 的视觉架构：应用导航 Rail、Workspace Header、品牌色层级、页面构图和 Project Hub Tabs。

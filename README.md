@@ -1,6 +1,6 @@
 # Obsidian 科研工作台 / Research Workbench
 
-一个本地优先的 Obsidian 科研信息系统，当前版本为 `v0.6.1` Visual Redesign / Modern Workspace。
+一个本地优先的 Obsidian 科研信息系统，当前版本为 `v0.6.2` Compound Registry。
 
 ## 架构原则
 
@@ -15,6 +15,7 @@
 - 待解核磁支持“删除已选（永久）”：逐套展示精确来源路径，需再次勾选确认，只能删除待解目录内的原始采集文件夹，并写入审计。
 - 关系完整性检查会报告缺失目标、类型错误、旧 ID、重复 ID、自引用和跨实体关系冲突。
 - 永久 ID 迁移预览显示真实 Legacy ID；迁移只写入缺失的 `record_id`。
+- 化合物页与 Project Hub 化合物页共用结构式优先的科学目录；仅读取 `structure_preview` 或成对的 ChemDraw PNG/CDX，不迁移、不复制结构文件。
 
 ## 功能
 
@@ -26,7 +27,7 @@
 - 插件设置中可配置 NMR 待处理目录、归档目录和启动行为。
 - 当前版本仅支持同一磁盘分区内归档；跨盘移动会在预检阶段拒绝。
 - 本版本不包含 TLC、AI、SQLite 或全局搜索功能。
-- v0.4.1 冻结 Research Entity Layer；后续新能力进入 v0.5.0+。
+- v0.6.2 冻结 Compound Registry；结构文件仍由 Vault 与 ChemDraw Paste 负责管理。
 
 ## 构建与测试
 

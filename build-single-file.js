@@ -15,6 +15,7 @@ const entries = [
   ['./lib/entities/project-relations', path.join(pluginDir, 'lib', 'entities', 'project-relations.js')],
   ['./lib/ui/project-hub', path.join(pluginDir, 'lib', 'ui', 'project-hub.js')],
   ['./lib/ui/unassigned-experiments', path.join(pluginDir, 'lib', 'ui', 'unassigned-experiments.js')],
+  ['./lib/ui/compound-registry', path.join(pluginDir, 'lib', 'ui', 'compound-registry.js')],
   ['./lib/migrations/permanent-id', path.join(pluginDir, 'lib', 'migrations', 'permanent-id.js')],
   ['./lib/nmr', path.join(pluginDir, 'lib', 'nmr.js')],
   ['./lib/nmr-archive-modal', path.join(pluginDir, 'lib', 'nmr-archive-modal.js')],
@@ -51,6 +52,7 @@ function normalizeLocalRequires(id, source) {
       .replace("require('./entities/project-relations')", "require('./lib/entities/project-relations')")
       .replace("require('./ui/project-hub')", "require('./lib/ui/project-hub')")
       .replace("require('./ui/unassigned-experiments')", "require('./lib/ui/unassigned-experiments')")
+      .replace("require('./ui/compound-registry')", "require('./lib/ui/compound-registry')")
       .replace("require('./modals/project-modal')", "require('./lib/modals/project-modal')")
       .replace("require('./modals/compound-modal')", "require('./lib/modals/compound-modal')")
       .replace("require('./modals/data-asset-modal')", "require('./lib/modals/data-asset-modal')")
@@ -69,8 +71,9 @@ function normalizeLocalRequires(id, source) {
       .replace("require('../data')", "require('./lib/data')");
   }
   if (id === './lib/entities/project-relations') return source.replace("require('./identity')", "require('./lib/entities/identity')").replace("require('../data')", "require('./lib/data')");
-  if (id === './lib/ui/project-hub') return source.replace("require('../entities/project-relations')", "require('./lib/entities/project-relations')");
+  if (id === './lib/ui/project-hub') return source.replace("require('../entities/project-relations')", "require('./lib/entities/project-relations')").replace("require('./compound-registry')", "require('./lib/ui/compound-registry')");
   if (id === './lib/ui/unassigned-experiments') return source.replace("require('../entities/project-relations')", "require('./lib/entities/project-relations')").replace("require('../entities/identity')", "require('./lib/entities/identity')");
+  if (id === './lib/ui/compound-registry') return source;
   if (id === './lib/migrations/permanent-id') {
     return source.replace("require('../database')", "require('./lib/database')");
   }

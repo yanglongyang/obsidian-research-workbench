@@ -28,6 +28,7 @@ const { NmrLedgerMigrationModal } = require('./modals/nmr-ledger-migration-modal
 const { projectRelations, unassignedExperiments, suggestProjectForExperiment, updateExperimentProject, batchAssignExperiments, upgradeLegacyExperimentAndAssign } = require('./entities/project-relations');
 const projectHubUi = require('./ui/project-hub');
 const unassignedUi = require('./ui/unassigned-experiments');
+const compoundRegistryUi = require('./ui/compound-registry');
 const pageRenderers = require('./ui/page-renderers');
 
 const VIEW_TYPE = 'phd-command-center-view';
@@ -632,18 +633,10 @@ class WorkbenchView extends ItemView {
   }
 
   _renderCompoundPage() {
-    this.renderPageHeader('化合物', '化合物是实验与数据资产的稳定关联节点', { label: '+ 新增化合物', onClick: () => this.openCompoundModal() });
-    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-entity-list' });
-    const items = this.entityStore.listCompounds().filter((item) => !this.searchQuery || `${item.title} ${item.compoundCode} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
-    if (!items.length) return void card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配化合物' : '暂无化合物' });
-    items.forEach((item) => {
-      const row = card.createDiv({ cls: 'phdcc-file-row' });
-      const title = row.createDiv({ cls: 'phdcc-file-title', text: `${item.compoundCode || item.title} · ${item.title}` });
-      makeInteractive(title, () => { void this.openFile(item.file); });
-      row.createDiv({ cls: 'phdcc-file-meta', text: `${item.project || '未关联课题'} · ${item.id}` });
-      const counts = this.researchDatabase.records.filter((record) => record.compoundId === item.id);
-      row.createDiv({ cls: 'phdcc-file-next', text: `关联记录：${counts.length}` });
-    });
+    this.renderPageHeader('化合物', 'Compound Registry · 结构式优先的科学目录', { label: '+ 新增化合物', onClick: () => this.openCompoundModal() });
+    const query = this.searchQuery.trim().toLowerCase();
+    const items = this.entityStore.listCompounds().filter((item) => !query || `${item.title} ${item.name || ''} ${item.compoundCode} ${item.id} ${item.project} ${item.formula}`.toLowerCase().includes(query));
+    compoundRegistryUi.renderCompoundRegistry(this, items);
   }
 
   _renderIntegrityPage() {
