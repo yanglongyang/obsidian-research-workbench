@@ -137,6 +137,7 @@ class WorkbenchView extends ItemView {
     this.workQueueErrors = {};
     this.activeWorkQueueSource = 'spectra';
     this.selectedProjectId = '';
+    this.selectedProjectHubTab = 'overview';
     this.root = null;
     this.pageEl = null;
     this.searchInput = null;
@@ -236,6 +237,7 @@ class WorkbenchView extends ItemView {
 
   renderTopbar(main) {
     const topbar = main.createDiv({ cls: 'phdcc-topbar' });
+    this.topbarContext = topbar.createDiv({ cls: 'phdcc-topbar-context', text: '科研工作台' });
     topbar.createDiv({
       cls: 'phdcc-date',
       text: new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
@@ -255,6 +257,7 @@ class WorkbenchView extends ItemView {
   }
 
   renderPage() {
+    if (this.topbarContext) this.topbarContext.setText(({ overview: '总览', today: '今日待办', calendar: '日历', projects: '课题项目', experiments: '实验记录', 'unassigned-experiments': '未归属实验', compound: '化合物', data: '数据资产', 'nmr-inbox': '待解核磁', 'work-queue': '待处理队列', 'research-db': '科研数据库', integrity: '关系检查', reviews: '周月总结', 'daily-review': '今日复盘', literature: '文献资料', writing: '写作管线' }[this.activeSection] || '科研工作台'));
     this.pageEl.empty();
     const renderer = {
       overview: () => this.renderOverview(),

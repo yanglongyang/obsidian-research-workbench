@@ -1,5 +1,11 @@
 .phdcc-view,
 .phdcc-task-modal {
+  --phdcc-bg: var(--background-primary, #f6f7f9);
+  --phdcc-sidebar: var(--background-secondary, #f1f3f6);
+  --phdcc-surface: var(--background-primary-alt, #ffffff);
+  --phdcc-soft: var(--background-secondary-alt, #f0f2f5);
+  --phdcc-accent: #5865e8;
+  --phdcc-info: #5865e8;
   --phdcc-bg: var(--background-primary, #fbfbf8);
   --phdcc-sidebar: var(--background-secondary, #f1f3ee);
   --phdcc-surface: var(--background-primary-alt, #ffffff);
@@ -17,6 +23,16 @@
   --phdcc-info: var(--interactive-accent, #587da8);
   --phdcc-shadow: 0 1px 2px rgba(24, 28, 20, 0.04), 0 12px 30px rgba(24, 28, 20, 0.06);
   --phdcc-radius: 12px;
+}
+
+.theme-dark .phdcc-view,
+.theme-dark .phdcc-task-modal {
+  --phdcc-bg: #17191d;
+  --phdcc-sidebar: #1d2025;
+  --phdcc-surface: #202329;
+  --phdcc-soft: #292d34;
+  --phdcc-accent: #7b86ff;
+  --phdcc-info: #7b86ff;
 }
 
 .theme-dark .phdcc-view,
@@ -879,6 +895,7 @@
 .phdcc-view .phdcc-nav-item.is-active::before { background: var(--phdcc-info); }
 .phdcc-view .phdcc-nav-count { min-width: 19px; padding: 1px 5px; border: 0; background: var(--phdcc-surface-soft); }
 .phdcc-view .phdcc-topbar { min-height: 52px; gap: 12px; padding: 0 20px; background: color-mix(in srgb, var(--phdcc-bg) 96%, transparent); backdrop-filter: blur(8px); }
+.phdcc-view .phdcc-topbar-context { color: var(--phdcc-text); font-size: 12px; font-weight: 700; letter-spacing: .01em; }
 .phdcc-view .phdcc-search { width: min(360px, 38%); height: 34px; border-color: var(--phdcc-border); border-radius: var(--phdcc-radius-md); background: var(--phdcc-surface-soft); }
 .phdcc-view .phdcc-search:focus-within { border-color: var(--phdcc-info); box-shadow: 0 0 0 2px color-mix(in srgb, var(--phdcc-info) 18%, transparent); }
 .phdcc-view .phdcc-key-hint { font-size: 10px; }
@@ -898,6 +915,7 @@
 .phdcc-view .phdcc-card,
 .phdcc-view .phdcc-project-card,
 .phdcc-view .phdcc-focus-card { margin-bottom: 14px; padding: 15px 16px; border: 1px solid var(--phdcc-border); border-radius: var(--phdcc-radius-lg); box-shadow: none; }
+.phdcc-view .phdcc-project-card { margin-bottom: 0; padding: 14px 4px; border-width: 1px 0 0; border-radius: 0; background: transparent; }
 .phdcc-view .phdcc-card-header { margin-bottom: 10px; }
 .phdcc-view .phdcc-card-title,
 .phdcc-view .phdcc-project-title,
@@ -961,6 +979,12 @@
 .phdcc-view .phdcc-alert--danger { color: var(--phdcc-danger); background: var(--phdcc-danger-soft); }
 .phdcc-view .phdcc-project-overview-grid .phdcc-card { height: 100%; }
 .phdcc-view .phdcc-page-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--phdcc-space-2); margin: -6px 0 14px; }
+.phdcc-view .phdcc-workspace-tabs { display: flex; gap: 22px; margin: 2px 0 16px; border-bottom: 1px solid var(--phdcc-border); overflow-x: auto; white-space: nowrap; }
+.phdcc-view .phdcc-workspace-tab { position: relative; min-height: 34px; padding: 4px 0 9px; color: var(--phdcc-muted); background: transparent; border: 0; border-radius: 0; font-size: 12px; font-weight: 650; cursor: pointer; }
+.phdcc-view .phdcc-workspace-tab::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: transparent; content: ''; }
+.phdcc-view .phdcc-workspace-tab:hover { color: var(--phdcc-text); }
+.phdcc-view .phdcc-workspace-tab[aria-selected='true'] { color: var(--phdcc-accent); }
+.phdcc-view .phdcc-workspace-tab[aria-selected='true']::after { background: var(--phdcc-accent); }
 .phdcc-view .phdcc-timeline-event { padding-left: 14px; border-left: 1px solid var(--phdcc-border-strong); }
 .phdcc-view .phdcc-timeline-event::before { position: absolute; left: -4px; top: 16px; width: 7px; height: 7px; border-radius: 50%; background: var(--phdcc-info); content: ''; }
 .phdcc-view .phdcc-file-next { overflow-wrap: anywhere; }
@@ -1006,6 +1030,7 @@
   .phdcc-view .phdcc-page-title { font-size: 23px; }
   .phdcc-view .phdcc-page-title-row,
   .phdcc-view .phdcc-page-actions { align-items: flex-start; flex-wrap: wrap; }
+  .phdcc-view .phdcc-workspace-tabs { gap: 18px; margin-right: -13px; padding-right: 13px; }
   .phdcc-view .phdcc-page-title-row .phdcc-page-add { margin-left: auto; }
   .phdcc-view .phdcc-stats { border-radius: var(--phdcc-radius-md); }
   .phdcc-view .phdcc-stat-card { flex-basis: 50%; border-right: 1px solid var(--phdcc-border); border-bottom: 1px solid var(--phdcc-border); }
