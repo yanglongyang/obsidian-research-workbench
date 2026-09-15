@@ -33,7 +33,7 @@ const { filterCompoundsByProject, suggestProjectFromCompound } = require('../plu
 const { reconcileRelations } = require('../plugin/lib/nmr-archive-modal');
 const { validateDataAssetRelations } = require('../plugin/lib/modals/data-asset-modal');
 const { EntityStore } = require('../plugin/lib/entities/store');
-const { WorkQueueStore, MAX_SCAN_FILES, platformError, summarizeEntry } = require('../plugin/lib/work-queue');
+const { WorkQueueStore, MAX_SCAN_FILES, MAX_SCAN_NODES, platformError, summarizeEntry } = require('../plugin/lib/work-queue');
 Module._load = originalLoad;
 
 const tests = [];
@@ -466,6 +466,19 @@ test('duplicate legacy IDs and existing migration entry IDs fail closed before t
   const result = await consolidateLegacyNmrAssets(app); assert.strictEqual(result.status, 'failed'); assert.strictEqual(result.migrated.length, 0); assert.strictEqual(vault.files.has(first.path), true); assert.strictEqual(vault.files.has(second.path), true);
 });
 
+test('legacy migration blocks unrepresentable custom metadata', async () => {
+  const vault = auditVault();
+  const file = { path: '00-博士工作台/04-数据资产/custom.md', basename: 'custom', extension: 'md', content: '' };
+  vault.files.set(file.path, file); vault.getMarkdownFiles = () => [file];
+  const metadata = { kind: 'data-asset', asset_type: 'nmr', record_id: 'DATA-CUSTOM', data_path: 'E:\\NMR\\custom', title: '1H NMR', tags: ['research/data', 'publication-important'], solvent: 'CDCl3' };
+  const app = { vault, metadataCache: { getFileCache: () => ({ frontmatter: metadata }) } };
+  const result = await preflightLegacyNmrAssets(app);
+  assert.ok(result.warnings.some((warning) => /自定义字段.*solvent/.test(warning)));
+  assert.ok(result.warnings.some((warning) => /自定义标签.*publication-important/.test(warning)));
+  assert.strictEqual((await consolidateLegacyNmrAssets(app)).migrated.length, 0);
+  assert.strictEqual(vault.files.has(file.path), true);
+});
+
 test('entity ID validator is shared by integrity and selectors', () => {
   assert.strictEqual(validateEntityId('PROJ-1', 'project').valid, true); assert.strictEqual(validateEntityId('EXP-1', 'project').valid, false);
   const result = database.validateRelationships([{ id: 'EXP-1', type: 'project', path: 'p.md' }, { id: 'PROJ-1', type: 'experiment', path: 'e.md' }, { id: 'DATA-1', type: 'compound', path: 'c.md' }]);
@@ -502,6 +515,14 @@ test('work queue scan is bounded for large directories', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-bound-')); const folder = path.join(root, 'large'); await fs.mkdir(folder, { recursive: true });
   await Promise.all(Array.from({ length: MAX_SCAN_FILES + 20 }, (_, index) => fs.writeFile(path.join(folder, `f-${index}.txt`), 'x')));
   const entry = await summarizeEntry(root, { name: 'large', isDirectory: () => true }); assert.strictEqual(entry.truncated, true); assert.strictEqual(entry.fileCount, MAX_SCAN_FILES); await fs.rm(root, { recursive: true, force: true });
+});
+
+test('work queue stops processing top-level entries at the global node budget', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-top-budget-'));
+  await Promise.all(Array.from({ length: MAX_SCAN_NODES + 50 }, (_, index) => fs.mkdir(path.join(root, `d-${index}`))));
+  const result = await new WorkQueueStore({ settings: { processingInboxFolder: root } }).listSource('data');
+  assert.strictEqual(result.truncated, true); assert.ok(result.entries.length < MAX_SCAN_NODES + 50);
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 test('legacy single-file NMR assets consolidate into the ledger and move to vault trash', async () => {

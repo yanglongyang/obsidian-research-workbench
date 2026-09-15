@@ -8,7 +8,7 @@
 - NMR 归档改为写入统一的 `NMR 归档台账.md`，不再为每套归档创建独立数据资产笔记；数据资产页可明确确认后合并旧单条 NMR 记录到台账并移入 Obsidian 回收站。
 - 新增“待处理队列”看板：扫描待测光谱、待处理数据和待完成文档的顶级项目，显示数量、体积与更新时间，支持打开原始位置和创建处理任务；待解核磁已排除以避免重复管理。
 - Data Safety / Closure：NMR 台账解析失败时 fail-closed，旧 NMR 合并增加重复冲突和写入后回读校验，实体 ID 与数据库/selector 统一校验，外部文件功能明确 Windows-only，工作队列采用有上限的递归扫描。
-- Final Data Closure：严格校验台账完整表头并兼容旧表格，修复 Windows 路径转义累积；NMR 台账保存关系 ID、标题与采集时间，普通数据资产入口不再创建新的 standalone NMR；增加实体目录完整性检查、全局工作队列扫描预算和 CI 构建校验。
+- Final Data Closure：严格校验台账完整表头并兼容旧表格，修复 Windows 路径转义累积；NMR 台账保存关系 ID、标题、采集时间与来源修改时间，普通数据资产入口不再创建新的 standalone NMR；增加实体目录完整性检查、全局工作队列扫描预算和 Windows CI 构建校验。
 
 ## 0.4.1 — Entity Layer Final Closure
 

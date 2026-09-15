@@ -844,8 +844,10 @@ const NMR_LEDGER_PATH = `${DATA_ASSET_FOLDER}/NMR 归档台账.md`;
 const NMR_LEDGER_ID = 'DATA-NMR-LEDGER';
 const START_MARKER = '<!-- NMR_LEDGER_ENTRIES_START -->';
 const END_MARKER = '<!-- NMR_LEDGER_ENTRIES_END -->';
-const LEDGER_HEADERS = ['条目 ID', '标题', '核种', '数据路径', '课题 ID', '课题', '实验 ID', '实验', '化合物 ID', '化合物', '采集时间', '归档时间'];
+const LEDGER_HEADERS = ['条目 ID', '标题', '核种', '数据路径', '课题 ID', '课题', '实验 ID', '实验', '化合物 ID', '化合物', '采集时间', '来源修改时间', '归档时间'];
+const PREVIOUS_LEDGER_HEADERS = ['条目 ID', '标题', '核种', '数据路径', '课题 ID', '课题', '实验 ID', '实验', '化合物 ID', '化合物', '采集时间', '归档时间'];
 const LEGACY_LEDGER_HEADERS = ['条目 ID', '核种', '数据路径', '课题', '实验', '化合物', '归档时间'];
+const LEGACY_ALLOWED_FIELDS = new Set(['record_id', 'kind', 'title', 'asset_type', 'project_id', 'project', 'experiment_id', 'experiment', 'compound_id', 'compound', 'data_path', 'acquired_at', 'status', 'created', 'updated', 'tags', 'created_via', 'notes']);
 let ledgerWriteQueue = Promise.resolve();
 
 function yamlString(value) { return JSON.stringify(String(value ?? '')); }
@@ -868,7 +870,7 @@ function serializeTableLine(line) {
 function renderLedger(entries, archiveRoot = '', timestamps = {}) {
   const created = timestamps.created || new Date().toISOString();
   const updated = timestamps.updated || new Date().toISOString();
-  const rows = entries.map((entry) => `| ${cell(entry.entryId)} | ${cell(entry.title)} | ${cell(entry.nucleus)} | ${cell(entry.dataPath)} | ${cell(entry.projectId)} | ${cell(entry.project)} | ${cell(entry.experimentId)} | ${cell(entry.experiment)} | ${cell(entry.compoundId)} | ${cell(entry.compound)} | ${cell(entry.acquiredAt)} | ${cell(entry.archivedAt)} |`).join('\n');
+  const rows = entries.map((entry) => `| ${cell(entry.entryId)} | ${cell(entry.title)} | ${cell(entry.nucleus)} | ${cell(entry.dataPath)} | ${cell(entry.projectId)} | ${cell(entry.project)} | ${cell(entry.experimentId)} | ${cell(entry.experiment)} | ${cell(entry.compoundId)} | ${cell(entry.compound)} | ${cell(entry.acquiredAt)} | ${cell(entry.sourceModifiedAt)} | ${cell(entry.archivedAt)} |`).join('\n');
   return ['---', `record_id: ${yamlString(NMR_LEDGER_ID)}`, 'kind: data-asset', `title: ${yamlString('NMR 归档台账')}`, `asset_type: ${yamlString('nmr')}`, `data_path: ${yamlString(archiveRoot)}`, `status: ${yamlString('available')}`, `created: ${yamlString(created)}`, `updated: ${yamlString(updated)}`, 'tags:', '  - research/data', '  - research/nmr', '---', '# NMR 归档台账', '', '每行对应一套已归档的核磁原始数据。可直接编辑此表；原始目录的实际位置以“数据路径”为准。', '', '## 归档记录', '', START_MARKER, `| ${LEDGER_HEADERS.join(' | ')} |`, `| ${LEDGER_HEADERS.map(() => '---').join(' | ')} |`, rows, END_MARKER, ''].join('\n');
 }
 
@@ -883,8 +885,9 @@ function parseLedgerEntries(content) {
   if (region.length < 2) return { ok: false, entries: [], error: 'NMR 台账表头不完整' };
   const header = serializeTableLine(region[0]); const divider = serializeTableLine(region[1]);
   const isV2 = header && header.length === LEDGER_HEADERS.length && LEDGER_HEADERS.every((value, index) => header[index] === value);
+  const isPrevious = header && header.length === PREVIOUS_LEDGER_HEADERS.length && PREVIOUS_LEDGER_HEADERS.every((value, index) => header[index] === value);
   const isLegacy = header && header.length === LEGACY_LEDGER_HEADERS.length && LEGACY_LEDGER_HEADERS.every((value, index) => header[index] === value);
-  const expectedHeaders = isV2 ? LEDGER_HEADERS : isLegacy ? LEGACY_LEDGER_HEADERS : null;
+  const expectedHeaders = isV2 ? LEDGER_HEADERS : isPrevious ? PREVIOUS_LEDGER_HEADERS : isLegacy ? LEGACY_LEDGER_HEADERS : null;
   if (!expectedHeaders || !divider || divider.length !== expectedHeaders.length || divider.some((value) => !/^:?-{3,}:?$/.test(value))) return { ok: false, entries: [], error: 'NMR 台账表格表头异常' };
   const entries = [];
   for (const line of region.slice(2)) {
@@ -892,8 +895,10 @@ function parseLedgerEntries(content) {
     if (!values || values.length !== expectedHeaders.length || values.some((value) => !value)) return { ok: false, entries: [], error: 'NMR 台账表格正文异常' };
     const valueOrEmpty = (value) => value === '—' ? '' : value;
     entries.push(isV2
-      ? { entryId: values[0], title: valueOrEmpty(values[1]), nucleus: values[2], dataPath: values[3], projectId: valueOrEmpty(values[4]), project: valueOrEmpty(values[5]), experimentId: valueOrEmpty(values[6]), experiment: valueOrEmpty(values[7]), compoundId: valueOrEmpty(values[8]), compound: valueOrEmpty(values[9]), acquiredAt: valueOrEmpty(values[10]), archivedAt: valueOrEmpty(values[11]) }
-      : { entryId: values[0], nucleus: values[1], dataPath: values[2], projectId: '', project: valueOrEmpty(values[3]), experimentId: '', experiment: valueOrEmpty(values[4]), compoundId: '', compound: valueOrEmpty(values[5]), acquiredAt: '', archivedAt: valueOrEmpty(values[6]) });
+      ? { entryId: values[0], title: valueOrEmpty(values[1]), nucleus: values[2], dataPath: values[3], projectId: valueOrEmpty(values[4]), project: valueOrEmpty(values[5]), experimentId: valueOrEmpty(values[6]), experiment: valueOrEmpty(values[7]), compoundId: valueOrEmpty(values[8]), compound: valueOrEmpty(values[9]), acquiredAt: valueOrEmpty(values[10]), sourceModifiedAt: valueOrEmpty(values[11]), archivedAt: valueOrEmpty(values[12]) }
+      : isPrevious
+      ? { entryId: values[0], title: valueOrEmpty(values[1]), nucleus: values[2], dataPath: values[3], projectId: valueOrEmpty(values[4]), project: valueOrEmpty(values[5]), experimentId: valueOrEmpty(values[6]), experiment: valueOrEmpty(values[7]), compoundId: valueOrEmpty(values[8]), compound: valueOrEmpty(values[9]), acquiredAt: valueOrEmpty(values[10]), sourceModifiedAt: '', archivedAt: valueOrEmpty(values[11]) }
+      : { entryId: values[0], nucleus: values[1], dataPath: values[2], projectId: '', project: valueOrEmpty(values[3]), experimentId: '', experiment: valueOrEmpty(values[4]), compoundId: '', compound: valueOrEmpty(values[5]), acquiredAt: '', sourceModifiedAt: '', archivedAt: valueOrEmpty(values[6]) });
   }
   const ids = new Set();
   for (const entry of entries) { if (ids.has(entry.entryId)) return { ok: false, entries: [], error: `NMR 台账存在重复条目 ID：${entry.entryId}` }; ids.add(entry.entryId); }
@@ -907,6 +912,10 @@ function readFrontmatterScalar(content, key) {
   if (raw.startsWith('"')) { try { return String(JSON.parse(raw)); } catch (error) { return raw.replace(/^"|"$/g, ''); } }
   if (raw.startsWith("'")) return raw.slice(1, raw.endsWith("'") ? -1 : undefined).replace(/''/g, "'");
   return raw;
+}
+function hasMeaningfulValue(value) {
+  if (Array.isArray(value)) return value.some((item) => String(item || '').trim());
+  return String(value ?? '').trim() !== '';
 }
 function withLedgerLock(task) { const run = ledgerWriteQueue.then(task, task); ledgerWriteQueue = run.catch(() => undefined); return run; }
 
@@ -923,7 +932,7 @@ async function upsertNmrLedger(app, input) {
       if (!parsed.ok) throw new Error(`NMR 台账结构异常，为避免覆盖历史记录，已停止写入：${parsed.error}`);
       entries = parsed.entries; created = readFrontmatterScalar(previous, 'created') || now; existingArchiveRoot = readFrontmatterScalar(previous, 'data_path');
     }
-    const entry = { entryId, title: String(input.title || ''), nucleus: String(input.nucleus || ''), dataPath, projectId: String(input.projectId || ''), project: String(input.project || ''), experimentId: String(input.experimentId || ''), experiment: String(input.experiment || ''), compoundId: String(input.compoundId || ''), compound: String(input.compound || ''), acquiredAt: String(input.acquiredAt || ''), archivedAt: String(input.archivedAt || now) };
+    const entry = { entryId, title: String(input.title || ''), nucleus: String(input.nucleus || ''), dataPath, projectId: String(input.projectId || ''), project: String(input.project || ''), experimentId: String(input.experimentId || ''), experiment: String(input.experiment || ''), compoundId: String(input.compoundId || ''), compound: String(input.compound || ''), acquiredAt: String(input.acquiredAt || ''), sourceModifiedAt: String(input.sourceModifiedAt || ''), archivedAt: String(input.archivedAt || now) };
     const index = entries.findIndex((item) => item.entryId === entryId); if (index >= 0) entries[index] = entry; else entries.push(entry);
     const content = renderLedger(entries, String(input.archiveRoot || '').trim() || existingArchiveRoot, { created, updated: now });
     const file = existing || await app.vault.create(NMR_LEDGER_PATH, content); if (existing) await app.vault.modify(file, content);
@@ -950,6 +959,11 @@ async function preflightLegacyNmrAssets(app) {
     if (dataPath && ledgerEntries.some((entry) => entry.dataPath === dataPath)) errors.push(`${item.file.path}：data_path 已存在于 NMR 台账：${dataPath}`);
     if (id && ledgerEntries.some((entry) => entry.entryId === `LEGACY-${id}`)) errors.push(`${item.file.path}：迁移 entry ID 已存在：LEGACY-${id}`);
     const lossy = [];
+    const customFields = Object.keys(item.frontmatter).filter((key) => hasMeaningfulValue(item.frontmatter[key]) && !LEGACY_ALLOWED_FIELDS.has(key));
+    if (customFields.length) warnings.push(`${item.file.path}：检测到台账无法表达的自定义字段：${customFields.join('、')}`);
+    const tags = Array.isArray(item.frontmatter.tags) ? item.frontmatter.tags.map((tag) => String(tag).trim()).filter(Boolean) : String(item.frontmatter.tags || '').split(/[ ,]+/).map((tag) => tag.trim()).filter(Boolean);
+    const customTags = tags.filter((tag) => tag !== 'research/data');
+    if (customTags.length) warnings.push(`${item.file.path}：检测到无法完整迁移的自定义标签：${customTags.join('、')}`);
     if (String(item.frontmatter.status || '').trim() && String(item.frontmatter.status).trim() !== 'available') lossy.push('status');
     if (String(item.frontmatter.notes || '').trim()) lossy.push('notes');
     // Legacy data-asset notes are normally stored in the markdown body under
@@ -975,7 +989,9 @@ async function consolidateLegacyNmrAssets(app) {
     const id = String(frontmatter.record_id).trim(); const dataPath = String(frontmatter.data_path).trim();
     try {
       const result = await upsertNmrLedger(app, { entryId: `LEGACY-${id}`, title: frontmatter.title, nucleus: /13C/i.test(String(frontmatter.title || '')) ? '13C' : /1H/i.test(String(frontmatter.title || '')) ? '1H' : 'NMR', dataPath, projectId: frontmatter.project_id, project: frontmatter.project, experimentId: frontmatter.experiment_id, experiment: frontmatter.experiment, compoundId: frontmatter.compound_id, compound: frontmatter.compound, acquiredAt: frontmatter.acquired_at, archivedAt: frontmatter.updated || frontmatter.created || frontmatter.acquired_at, archiveRoot: '' });
-      const ledger = app.vault.getAbstractFileByPath(NMR_LEDGER_PATH); const parsed = ledger ? parseLedgerEntries(await app.vault.read(ledger)) : { ok: false, entries: [] }; const verified = parsed.ok && parsed.entries.some((entry) => entry.entryId === result.entryId && entry.dataPath === dataPath);
+      const ledger = app.vault.getAbstractFileByPath(NMR_LEDGER_PATH); const parsed = ledger ? parseLedgerEntries(await app.vault.read(ledger)) : { ok: false, entries: [] };
+      const expected = { entryId: result.entryId, dataPath, title: String(frontmatter.title || ''), projectId: String(frontmatter.project_id || ''), experimentId: String(frontmatter.experiment_id || ''), compoundId: String(frontmatter.compound_id || ''), acquiredAt: String(frontmatter.acquired_at || '') };
+      const verified = parsed.ok && parsed.entries.some((entry) => Object.entries(expected).every(([key, value]) => String(entry[key] || '') === value));
       if (!verified) { failed.push({ file, error: '写入后回读未找到匹配台账条目，原笔记未移入回收站' }); continue; }
       if (typeof app.vault.trash !== 'function') throw new Error('Obsidian Vault 不支持可恢复回收站');
       await app.vault.trash(file, false); migrated.push(file);
@@ -984,7 +1000,7 @@ async function consolidateLegacyNmrAssets(app) {
   return { status: failed.length ? (migrated.length ? 'partial_failure' : 'failed') : 'completed', migrated, skipped, failed, errors: [], warnings: [] };
 }
 
-module.exports = { NMR_LEDGER_PATH, NMR_LEDGER_ID, START_MARKER, END_MARKER, LEDGER_HEADERS, LEGACY_LEDGER_HEADERS, isNmrLedgerPath, parseLedgerEntries, renderLedger, upsertNmrLedger, legacyNmrAssets, preflightLegacyNmrAssets, consolidateLegacyNmrAssets };
+module.exports = { NMR_LEDGER_PATH, NMR_LEDGER_ID, START_MARKER, END_MARKER, LEDGER_HEADERS, PREVIOUS_LEDGER_HEADERS, LEGACY_LEDGER_HEADERS, isNmrLedgerPath, parseLedgerEntries, renderLedger, upsertNmrLedger, legacyNmrAssets, preflightLegacyNmrAssets, consolidateLegacyNmrAssets };
 
 },
 "./lib/entities/identity": function (module, exports, require) {
@@ -1616,7 +1632,8 @@ class NmrInboxStore {
             experiment: relations.experiment || '',
             compoundId: relations.compoundId || '',
             compound: relations.compound || '',
-            acquiredAt: plan.modified || '',
+            acquiredAt: '',
+            sourceModifiedAt: plan.modified || '',
             archivedAt: new Date().toISOString()
           });
           dataAssetId = result.ledgerId;
@@ -2071,13 +2088,15 @@ class WorkQueueStore {
     const results = [];
     const errors = [];
     const budget = { nodes: 0 };
+    let truncated = false;
     for (const entry of entries) {
+      if (budget.nodes >= MAX_SCAN_NODES) { truncated = true; break; }
       if (excluded.has(entry.name.toLocaleLowerCase())) continue;
       try { results.push(await summarizeEntry(root, entry, budget)); }
       catch (error) { errors.push({ name: entry.name, error: error instanceof Error ? error.message : String(error) }); }
     }
     results.sort((a, b) => String(b.modified).localeCompare(String(a.modified)) || a.name.localeCompare(b.name));
-    return { source: { ...source, root }, entries: results, errors };
+    return { source: { ...source, root }, entries: results, errors, truncated };
   }
 
   async openEntry(id, entryPath) {
@@ -3641,6 +3660,7 @@ class WorkbenchView extends ItemView {
       return;
     }
     if (queue.errors.length) card.createDiv({ cls: 'phdcc-file-next', text: `${queue.errors.length} 个项目未能读取，已跳过。` });
+    if (queue.truncated) card.createDiv({ cls: 'phdcc-file-next', text: '已达到扫描上限，仅显示部分待处理项目。' });
     const entries = this.filteredWorkQueueEntries(queue.entries);
     if (!entries.length) return void card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配的待处理项目' : '该目录暂无待处理项目' });
     entries.forEach((entry) => {

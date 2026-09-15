@@ -87,13 +87,15 @@ class WorkQueueStore {
     const results = [];
     const errors = [];
     const budget = { nodes: 0 };
+    let truncated = false;
     for (const entry of entries) {
+      if (budget.nodes >= MAX_SCAN_NODES) { truncated = true; break; }
       if (excluded.has(entry.name.toLocaleLowerCase())) continue;
       try { results.push(await summarizeEntry(root, entry, budget)); }
       catch (error) { errors.push({ name: entry.name, error: error instanceof Error ? error.message : String(error) }); }
     }
     results.sort((a, b) => String(b.modified).localeCompare(String(a.modified)) || a.name.localeCompare(b.name));
-    return { source: { ...source, root }, entries: results, errors };
+    return { source: { ...source, root }, entries: results, errors, truncated };
   }
 
   async openEntry(id, entryPath) {

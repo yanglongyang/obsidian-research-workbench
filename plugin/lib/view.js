@@ -824,6 +824,7 @@ class WorkbenchView extends ItemView {
       return;
     }
     if (queue.errors.length) card.createDiv({ cls: 'phdcc-file-next', text: `${queue.errors.length} 个项目未能读取，已跳过。` });
+    if (queue.truncated) card.createDiv({ cls: 'phdcc-file-next', text: '已达到扫描上限，仅显示部分待处理项目。' });
     const entries = this.filteredWorkQueueEntries(queue.entries);
     if (!entries.length) return void card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配的待处理项目' : '该目录暂无待处理项目' });
     entries.forEach((entry) => {

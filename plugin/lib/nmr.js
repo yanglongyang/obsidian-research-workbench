@@ -476,7 +476,8 @@ class NmrInboxStore {
             experiment: relations.experiment || '',
             compoundId: relations.compoundId || '',
             compound: relations.compound || '',
-            acquiredAt: plan.modified || '',
+            acquiredAt: '',
+            sourceModifiedAt: plan.modified || '',
             archivedAt: new Date().toISOString()
           });
           dataAssetId = result.ledgerId;
