@@ -2,7 +2,7 @@ const { PROJECT_ENTITY_FOLDER } = require('./project');
 const { COMPOUND_FOLDER } = require('./compound');
 const { DATA_ASSET_FOLDER } = require('./data-asset');
 const { EXPERIMENT_FOLDERS } = require('../data');
-const { isPermanentEntityId, validateEntityId } = require('./identity');
+const { isPermanentEntityId, validateEntityRecord } = require('./identity');
 
 function text(value) { return typeof value === 'string' ? value.trim() : ''; }
 function inFolder(file, folders) {
@@ -37,10 +37,10 @@ class EntityStore {
     })).sort((a, b) => a.title.localeCompare(b.title));
   }
 
-  listProjects() { return this.list('project').filter((item) => validateEntityId(item.id, 'project').valid); }
-  listExperiments() { return this.list('experiment').filter((item) => validateEntityId(item.id, 'experiment').valid); }
-  listCompounds() { return this.list('compound').filter((item) => validateEntityId(item.id, 'compound').valid); }
-  listDataAssets() { return this.list('data-asset').filter((item) => validateEntityId(item.id, 'data-asset').valid); }
+  listProjects() { return this.list('project').filter((item) => validateEntityRecord(item).valid); }
+  listExperiments() { return this.list('experiment').filter((item) => validateEntityRecord(item).valid); }
+  listCompounds() { return this.list('compound').filter((item) => validateEntityRecord(item).valid); }
+  listDataAssets() { return this.list('data-asset').filter((item) => validateEntityRecord(item).valid); }
 
   getById(id, expectedKind = '') {
     const items = expectedKind ? this.list(expectedKind) : ['project', 'experiment', 'compound', 'data-asset'].flatMap((kind) => this.list(kind));

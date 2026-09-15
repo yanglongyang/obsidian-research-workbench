@@ -195,7 +195,7 @@ test('project, compound and data asset creation writes typed Markdown entities',
   const asset = await createDataAsset(app, { title: 'NMR', assetType: 'nmr', dataPath: 'E:/nmr', projectId: 'PROJ-TEST', experimentId: 'EXP-TEST', compoundId: 'CMP-TEST' }, id);
   assert.match(project.path, /02-课题/); assert.match(project.content, /kind: project/); assert.match(project.content, /record_id: "PROJ-TEST"/);
   assert.match(compound.path, /04-化合物/); assert.match(compound.content, /kind: compound/);
-  assert.match(asset.file.path, /04-数据资产/); assert.match(asset.file.content, /asset_type: "nmr"/);
+  assert.match(asset.file.path, /04-数据资产/); assert.match(asset.file.content, /asset_type: "nmr"/); assert.match(asset.file.content, /created_via: "data-asset-modal"/);
   await assert.rejects(() => createProject(app, {}, id));
   await assert.rejects(() => createCompound(app, {}, id));
   await assert.rejects(() => createDataAsset(app, { title: 'bad', assetType: 'invalid', dataPath: 'x' }, id));
@@ -413,7 +413,8 @@ test('damaged NMR ledger is fail-closed and remains byte-identical', async () =>
     '# missing markers',
     `${START_MARKER}\n| 条目 ID | 核种 | 数据路径 | 课题 | 实验 | 化合物 | 归档时间 |\n| --- | --- | --- | --- | --- | --- | --- |`,
     `${END_MARKER}\n${START_MARKER}`,
-    `${START_MARKER}\n| 条目 ID | 核种 | 数据路径 | 课题 | 实验 | 化合物 | 归档时间 |\n| --- | --- | --- | --- | --- | --- | --- |\n| broken | 1H | only-three | ${END_MARKER}`
+    `${START_MARKER}\n| 条目 ID | 核种 | 数据路径 | 课题 | 实验 | 化合物 | 归档时间 |\n| --- | --- | --- | --- | --- | --- | --- |\n| broken | 1H | only-three | ${END_MARKER}`,
+    `${START_MARKER}\n| 条目 ID | 数据路径 | 核种 | 课题 | 实验 | 化合物 | 归档时间 |\n| --- | --- | --- | --- | --- | --- | --- |\n| broken | E:\\NMR\\x | 1H | — | — | — | 2026-01-01 |\n${END_MARKER}`
   ]) {
     const vault = auditVault();
     const file = { path: NMR_LEDGER_PATH, content: damaged };
@@ -442,7 +443,9 @@ test('existing ledger archive root survives legacy migration when input root is 
   const metadata = new Map([[legacy, { kind: 'data-asset', asset_type: 'nmr', record_id: 'DATA-LEGACY-ROOT', data_path: 'E:\\NMR\\legacy', title: '1H NMR' }]]);
   app.metadataCache = { getFileCache: (file) => ({ frontmatter: metadata.get(file) || {} }) };
   const result = await consolidateLegacyNmrAssets(app); assert.strictEqual(result.status, 'completed');
-  assert.match(vault.files.get(NMR_LEDGER_PATH).content, /data_path:.*NMR-ARCHIVE/);
+  for (let index = 0; index < 10; index += 1) await upsertNmrLedger(app, { entryId: `ROOT-CHECK-${index}`, nucleus: '1H', dataPath: `E:\\NMR\\check-${index}`, archiveRoot: '' });
+  const rootMatch = vault.files.get(NMR_LEDGER_PATH).content.match(/^data_path:\s*(.*)$/m);
+  assert.strictEqual(JSON.parse(rootMatch[1]), 'E:\\NMR-ARCHIVE');
 });
 
 test('malformed acqus is listed as unknown without hiding valid NMR scans', async () => {
@@ -467,6 +470,7 @@ test('entity ID validator is shared by integrity and selectors', () => {
   assert.strictEqual(validateEntityId('PROJ-1', 'project').valid, true); assert.strictEqual(validateEntityId('EXP-1', 'project').valid, false);
   const result = database.validateRelationships([{ id: 'EXP-1', type: 'project', path: 'p.md' }, { id: 'PROJ-1', type: 'experiment', path: 'e.md' }, { id: 'DATA-1', type: 'compound', path: 'c.md' }]);
   assert.strictEqual(result.issues.filter((issue) => issue.type === 'invalid_record_id').length, 3);
+  assert.ok(result.issues.some((issue) => issue.type === 'wrong_entity_folder'));
 });
 
 test('relation state clears incompatible children and rejects contradictory DataAsset links', () => {

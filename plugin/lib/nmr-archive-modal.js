@@ -4,7 +4,7 @@ const path = require('path');
 function reconcileRelations(relations, projectId, experiments = [], compounds = []) {
   const next = { ...relations, projectId: projectId || '', project: '' };
   const project = relations.projectItems?.find((item) => item.id === projectId);
-  next.project = project?.title || relations.project || '';
+  next.project = project?.title || '';
   const experiment = experiments.find((item) => item.id === next.experimentId);
   const compound = compounds.find((item) => item.id === next.compoundId);
   if (next.experimentId && experiment?.projectId && experiment.projectId !== next.projectId) { next.experimentId = ''; next.experiment = ''; }

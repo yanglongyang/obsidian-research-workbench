@@ -49,9 +49,14 @@ function archiveCategory(nucleus) {
 
 function archiveFolderName(value, fallback = '') {
   const name = String(value || fallback || '').trim();
-  if (!name) throw new Error('归档文件夹名称不能为空');
-  if (name === '.' || name === '..' || /[<>:"/\\|?*\u0000-\u001F\u007F]/.test(name) || /[. ]$/.test(name) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name)) throw new Error('归档文件夹名称包含 Windows 不允许的字符');
-  return name.slice(0, 120);
+  const validate = (candidate) => {
+    if (!candidate) throw new Error('归档文件夹名称不能为空');
+    if (candidate === '.' || candidate === '..' || /[<>:"/\\|?*\u0000-\u001F\u007F]/.test(candidate) || /[. ]$/.test(candidate) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(candidate)) throw new Error('归档文件夹名称包含 Windows 不允许的字符');
+  };
+  validate(name);
+  const truncated = name.slice(0, 120);
+  validate(truncated);
+  return truncated;
 }
 
 function archiveBatchStatus(archivedCount, failedCount) {
@@ -461,6 +466,7 @@ class NmrInboxStore {
         try {
           const result = await this.registerNmrArchive(this.app, {
             entryId: operationId,
+            title: plan.originalBatchName || plan.scanFolderName,
             nucleus: plan.nucleus,
             dataPath: plan.destinationPath,
             archiveRoot,
@@ -470,6 +476,7 @@ class NmrInboxStore {
             experiment: relations.experiment || '',
             compoundId: relations.compoundId || '',
             compound: relations.compound || '',
+            acquiredAt: plan.modified || '',
             archivedAt: new Date().toISOString()
           });
           dataAssetId = result.ledgerId;

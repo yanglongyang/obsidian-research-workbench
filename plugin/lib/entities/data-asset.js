@@ -37,6 +37,7 @@ function renderDataAssetContent(asset) {
     `data_path: ${yamlString(asset.dataPath)}`,
     `acquired_at: ${yamlString(asset.acquiredAt)}`,
     `status: ${yamlString(asset.status || 'available')}`,
+    'created_via: "data-asset-modal"',
     `created: ${yamlString(asset.created)}`,
     `updated: ${yamlString(asset.updated)}`,
     'tags:',

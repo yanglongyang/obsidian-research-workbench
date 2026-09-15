@@ -3,6 +3,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const MAX_SCAN_FILES = 2000;
 const MAX_SCAN_DEPTH = 8;
+const MAX_SCAN_NODES = 3000;
 
 const WORK_QUEUE_SOURCES = [
   { id: 'spectra', setting: 'spectrumInboxFolder', label: '待测光谱', description: '待测光谱、质谱、荧光及其分析文件', excludedNames: [] },
@@ -21,18 +22,19 @@ function insideRoot(candidate, root) {
 
 function platformError(platform = process.platform) { return platform === 'win32' ? '' : '当前版本的外部文件系统功能仅支持 Windows。'; }
 
-async function summarizeDirectory(root, current, summary, depth = 0) {
-  if (depth > MAX_SCAN_DEPTH || summary.fileCount >= MAX_SCAN_FILES) { summary.truncated = true; return; }
+async function summarizeDirectory(root, current, summary, depth = 0, budget = { nodes: 0 }) {
+  if (depth > MAX_SCAN_DEPTH || summary.fileCount >= MAX_SCAN_FILES || budget.nodes >= MAX_SCAN_NODES) { summary.truncated = true; return; }
   const entries = await fs.readdir(current, { withFileTypes: true });
   for (const entry of entries) {
-    if (summary.fileCount >= MAX_SCAN_FILES) { summary.truncated = true; break; }
+    if (summary.fileCount >= MAX_SCAN_FILES || budget.nodes >= MAX_SCAN_NODES) { summary.truncated = true; break; }
+    budget.nodes += 1;
     const fullPath = pathApi(root).join(current, entry.name);
     if (!insideRoot(fullPath, root)) continue;
     if (entry.isDirectory()) {
       summary.directoryCount += 1;
       const stat = await fs.stat(fullPath);
       if (stat.mtimeMs > summary.modifiedMs) summary.modifiedMs = stat.mtimeMs;
-      await summarizeDirectory(root, fullPath, summary, depth + 1);
+      await summarizeDirectory(root, fullPath, summary, depth + 1, budget);
     } else if (entry.isFile()) {
       const stat = await fs.stat(fullPath);
       summary.fileCount += 1;
@@ -43,15 +45,19 @@ async function summarizeDirectory(root, current, summary, depth = 0) {
   }
 }
 
-async function summarizeEntry(root, entry) {
+async function summarizeEntry(root, entry, budget = { nodes: 0 }) {
   const fullPath = pathApi(root).resolve(root, entry.name);
   if (!insideRoot(fullPath, root) || fullPath.toLowerCase() === root.toLowerCase()) throw new Error('队列路径不安全');
   const stat = await fs.lstat(fullPath);
   if (stat.isSymbolicLink()) throw new Error('不索引符号链接');
   const summary = { fileCount: 0, directoryCount: 0, totalBytes: 0, modifiedMs: stat.mtimeMs, truncated: false };
-  if (stat.isDirectory()) {
+  budget.nodes += 1;
+  if (stat.isDirectory() && budget.nodes < MAX_SCAN_NODES) {
     summary.directoryCount = 1;
-    await summarizeDirectory(root, fullPath, summary);
+    await summarizeDirectory(root, fullPath, summary, 0, budget);
+  } else if (stat.isDirectory()) {
+    summary.directoryCount = 1;
+    summary.truncated = true;
   } else if (stat.isFile()) {
     summary.fileCount = 1;
     summary.totalBytes = stat.size;
@@ -80,9 +86,10 @@ class WorkQueueStore {
     const excluded = new Set(source.excludedNames.map((name) => name.toLocaleLowerCase()));
     const results = [];
     const errors = [];
+    const budget = { nodes: 0 };
     for (const entry of entries) {
       if (excluded.has(entry.name.toLocaleLowerCase())) continue;
-      try { results.push(await summarizeEntry(root, entry)); }
+      try { results.push(await summarizeEntry(root, entry, budget)); }
       catch (error) { errors.push({ name: entry.name, error: error instanceof Error ? error.message : String(error) }); }
     }
     results.sort((a, b) => String(b.modified).localeCompare(String(a.modified)) || a.name.localeCompare(b.name));
@@ -104,4 +111,4 @@ class WorkQueueStore {
   }
 }
 
-module.exports = { WORK_QUEUE_SOURCES, MAX_SCAN_FILES, MAX_SCAN_DEPTH, platformError, resolvePath, insideRoot, summarizeEntry, WorkQueueStore };
+module.exports = { WORK_QUEUE_SOURCES, MAX_SCAN_FILES, MAX_SCAN_DEPTH, MAX_SCAN_NODES, platformError, resolvePath, insideRoot, summarizeEntry, WorkQueueStore };

@@ -3,7 +3,7 @@ const DB_FILE = `${DB_FOLDER}/records.json`;
 const AUDIT_FOLDER = '00-博士工作台/应用数据/审计';
 const AUDIT_FILE = `${AUDIT_FOLDER}/nmr-archive.jsonl`;
 const DATABASE_SCHEMA_VERSION = 3;
-const { validateEntityId, expectedPrefixForType } = require('./entities/identity');
+const { validateEntityRecord } = require('./entities/identity');
 const MANAGED_FOLDERS = ['00-博士工作台', '实验记录', '文献', '文献阅读', 'DMAC_AIE_PET_调研'];
 
 function normalizePath(value) {
@@ -90,8 +90,9 @@ function validateRelationships(records) {
   const issues = [];
   list.forEach((source) => {
     if (!source?.id) return;
-    const validation = validateEntityId(source.id, source.type);
-    if (!validation.valid && expectedPrefixForType(source.type)) issues.push({ type: 'invalid_record_id', sourcePath: source.path, sourceId: source.id, expectedPrefix: validation.expectedPrefix, actualId: source.id, message: `record_id 前缀无效：${source.id}（应为 ${validation.expectedPrefix}）` });
+    const validation = validateEntityRecord(source);
+    if (!validation.valid && validation.expectedPrefix && !validation.validFolder) issues.push({ type: 'wrong_entity_folder', sourcePath: source.path, sourceId: source.id, expectedFolders: validation.folders, message: `实体文件夹不符合 ${source.type} 规范：${source.path}` });
+    if (!validation.entityIdValid && validation.expectedPrefix) issues.push({ type: 'invalid_record_id', sourcePath: source.path, sourceId: source.id, expectedPrefix: validation.expectedPrefix, actualId: source.id, message: `record_id 前缀无效：${source.id}（应为 ${validation.expectedPrefix}）` });
   });
   const duplicateIds = [...byId.entries()].filter(([, matches]) => matches.length > 1);
   duplicateIds.forEach(([id, matches]) => matches.forEach((source) => issues.push({ type: 'duplicate_record_id', sourcePath: source.path, sourceId: source.id, field: 'record_id', targetId: id, message: `record_id 重复：${id}` })));

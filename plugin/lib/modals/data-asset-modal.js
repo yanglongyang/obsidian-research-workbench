@@ -3,6 +3,7 @@ const { createDataAsset, ASSET_TYPES } = require('../entities/data-asset');
 const { generateRecordId } = require('../data');
 
 const ASSET_LABELS = { nmr: 'NMR', hplc: 'HPLC', ms: 'MS', uvvis: 'UV-Vis', fluorescence: '荧光', image: '图像', orca: 'ORCA', raw: '原始数据', other: '其他' };
+const MANUAL_ASSET_TYPES = ASSET_TYPES.filter((type) => type !== 'nmr');
 
 function validateDataAssetRelations(state, entityStore) {
   const projects = entityStore.listProjects(); const experiments = entityStore.listExperiments(); const compounds = entityStore.listCompounds(); const errors = [];
@@ -17,12 +18,13 @@ function validateDataAssetRelations(state, entityStore) {
 }
 
 class DataAssetModal extends Modal {
-  constructor(app, entityStore, options = {}) { super(app); this.entityStore = entityStore; this.options = options; this.state = { title: '', assetType: 'nmr', dataPath: '', projectId: '', project: '', experimentId: '', experiment: '', compoundId: '', compound: '', acquiredAt: '', notes: '', saving: false }; }
+  constructor(app, entityStore, options = {}) { super(app); this.entityStore = entityStore; this.options = options; this.state = { title: '', assetType: 'hplc', dataPath: '', projectId: '', project: '', experimentId: '', experiment: '', compoundId: '', compound: '', acquiredAt: '', notes: '', saving: false }; }
   onOpen() {
     this.modalEl.addClass('phdcc-task-modal');
     this.contentEl.createEl('h2', { text: '新增数据资产' });
     new Setting(this.contentEl).setName('标题').addText((text) => { text.inputEl.required = true; text.inputEl.placeholder = '例如：YLY-145 1H NMR'; text.onChange((value) => { this.state.title = value; }); setTimeout(() => text.inputEl.focus(), 30); });
-    new Setting(this.contentEl).setName('类型').addDropdown((dropdown) => { ASSET_TYPES.forEach((type) => dropdown.addOption(type, ASSET_LABELS[type] || type)); dropdown.setValue(this.state.assetType); dropdown.onChange((value) => { this.state.assetType = value; }); });
+    this.contentEl.createDiv({ cls: 'phdcc-empty', text: '核磁原始数据请通过“待解核磁 → 归档”登记到统一台账；此处用于登记其他类型的数据资产。' });
+    new Setting(this.contentEl).setName('类型').addDropdown((dropdown) => { MANUAL_ASSET_TYPES.forEach((type) => dropdown.addOption(type, ASSET_LABELS[type] || type)); dropdown.setValue(this.state.assetType); dropdown.onChange((value) => { this.state.assetType = value; }); });
     new Setting(this.contentEl).setName('数据路径').addText((text) => { text.inputEl.required = true; text.inputEl.placeholder = 'Vault 内路径或 Windows 外部路径'; text.onChange((value) => { this.state.dataPath = value; }); });
     this.addRelationSelect('project');
     this.addRelationSelect('experiment');
@@ -41,4 +43,4 @@ class DataAssetModal extends Modal {
   }
   onClose() { this.contentEl.empty(); }
 }
-module.exports = { DataAssetModal, ASSET_LABELS, validateDataAssetRelations };
+module.exports = { DataAssetModal, ASSET_LABELS, MANUAL_ASSET_TYPES, validateDataAssetRelations };
