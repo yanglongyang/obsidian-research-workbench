@@ -1,6 +1,17 @@
 const { Modal, Notice, Setting } = require('obsidian');
 const path = require('path');
 
+function reconcileRelations(relations, projectId, experiments = [], compounds = []) {
+  const next = { ...relations, projectId: projectId || '', project: '' };
+  const project = relations.projectItems?.find((item) => item.id === projectId);
+  next.project = project?.title || relations.project || '';
+  const experiment = experiments.find((item) => item.id === next.experimentId);
+  const compound = compounds.find((item) => item.id === next.compoundId);
+  if (next.experimentId && experiment?.projectId && experiment.projectId !== next.projectId) { next.experimentId = ''; next.experiment = ''; }
+  if (next.compoundId && compound?.projectId && compound.projectId !== next.projectId) { next.compoundId = ''; next.compound = ''; }
+  return next;
+}
+
 class NmrArchiveModal extends Modal {
   constructor(app, nmrInboxStore, relativePaths, options = {}) {
     super(app);
@@ -51,7 +62,12 @@ class NmrArchiveModal extends Modal {
           this.relations[idKey] = value;
           const item = items.find((candidate) => candidate.id === value);
           this.relations[key] = item?.title || '';
-          if (key === 'project') this.renderRelations();
+          if (key === 'project') {
+            const next = reconcileRelations({ ...this.relations, projectItems: projects }, value, experiments, compounds);
+            delete next.projectItems;
+            this.relations = next;
+            this.renderRelations();
+          }
           if (key === 'experiment' && item) {
             if (!this.relations.projectId && item.projectId) { this.relations.projectId = item.projectId; this.relations.project = projects.find((candidate) => candidate.id === item.projectId)?.title || ''; }
             if (!this.relations.compoundId && item.compoundId) { this.relations.compoundId = item.compoundId; this.relations.compound = compounds.find((candidate) => candidate.id === item.compoundId)?.title || ''; }
@@ -163,4 +179,4 @@ class NmrArchiveModal extends Modal {
   }
 }
 
-module.exports = { NmrArchiveModal };
+module.exports = { NmrArchiveModal, reconcileRelations };

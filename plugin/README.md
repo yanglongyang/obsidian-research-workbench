@@ -50,4 +50,4 @@ npm test
 npm run build
 ```
 
-本插件当前声明为 Desktop-only，因为 NMR 文件系统集成使用 `fs/promises`、`path` 和 `child_process`。核心 Markdown 和数据库逻辑不依赖网络或专有数据库。
+本插件当前声明为 Desktop-only；外部科研数据目录、NMR 管理、待处理队列和 Explorer 跳转明确仅支持 Windows。核心 Markdown 和数据库逻辑不依赖网络或专有数据库。

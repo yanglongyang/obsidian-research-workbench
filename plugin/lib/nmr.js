@@ -6,7 +6,6 @@ const NMR_ARCHIVE_FOLDER = '';
 const NUCLEUS_ARCHIVE_MAP = { '1H': '氢谱', '13C': '碳谱' };
 const { AUDIT_FOLDER, AUDIT_FILE } = require('./database');
 const { upsertNmrLedger } = require('./entities/nmr-ledger');
-const { generateRecordId } = require('./data');
 
 const { spawn } = require('child_process');
 
@@ -62,6 +61,10 @@ function archiveBatchStatus(archivedCount, failedCount) {
   return archived > 0 ? 'partial_failure' : 'failed';
 }
 
+function platformError(platform = process.platform) {
+  return platform === 'win32' ? '' : '当前版本的外部文件系统功能仅支持 Windows。';
+}
+
 async function pathExists(candidate) {
   try {
     await fs.lstat(candidate);
@@ -98,23 +101,28 @@ async function summarizeFolder(root) {
   return summary;
 }
 
-async function scanDirectory(root, current, results) {
-  const entries = await fs.readdir(current, { withFileTypes: true });
+async function scanDirectory(root, current, results, errors) {
+  let entries;
+  try { entries = await fs.readdir(current, { withFileTypes: true }); }
+  catch (error) { errors.push({ path: current, error: error instanceof Error ? error.message : String(error) }); return; }
   for (const entry of entries) {
     const fullPath = path.win32.join(current, entry.name);
     if (!insideRoot(fullPath, root)) continue;
+    if (entry.isSymbolicLink()) { errors.push({ path: fullPath, error: '跳过符号链接目录' }); continue; }
     if (entry.isDirectory()) {
-      await scanDirectory(root, fullPath, results);
+      await scanDirectory(root, fullPath, results, errors);
       continue;
     }
     if (!entry.isFile() || entry.name.toLowerCase() !== 'acqus') continue;
 
     const scanFolder = path.win32.dirname(fullPath);
-    const [content, stat, summary] = await Promise.all([
-      fs.readFile(fullPath, 'utf8'),
-      fs.stat(scanFolder),
-      summarizeFolder(scanFolder)
-    ]);
+    let content, stat, summary;
+    try {
+      [content, stat, summary] = await Promise.all([fs.readFile(fullPath, 'utf8'), fs.stat(scanFolder), summarizeFolder(scanFolder)]);
+    } catch (error) {
+      errors.push({ path: scanFolder, error: error instanceof Error ? error.message : String(error) });
+      continue;
+    }
     const relativeScanPath = path.win32.relative(root, scanFolder);
     const parentPath = path.win32.dirname(relativeScanPath);
     let hasFid = false;
@@ -139,7 +147,10 @@ class NmrInboxStore {
     this.plugin = plugin;
     this.app = plugin?.app;
     this.registerNmrArchive = options.registerNmrArchive || upsertNmrLedger;
+    this.platform = options.platform || process.platform;
   }
+
+  getPlatformError() { return platformError(this.platform); }
 
   get inboxFolder() {
     return String(this.plugin?.settings?.nmrInboxFolder || '').trim();
@@ -160,12 +171,13 @@ class NmrInboxStore {
   }
 
   async openFolder(folder, app) {
+    if (this.getPlatformError()) throw new Error(this.getPlatformError());
     const target = resolveNmrPath(folder);
     const root = resolveNmrPath(this.inboxFolder);
     const archiveRoot = resolveNmrPath(this.archiveFolder);
     if (!insideRoot(target, root) && !insideRoot(target, archiveRoot)) throw new Error('拒绝打开工作区外的路径');
     await fs.access(target);
-    if (process.platform !== 'win32') throw new Error('当前仅支持 Windows 文件夹跳转');
+    if (this.platform !== 'win32') throw new Error(this.getPlatformError());
 
     // Start Explorer directly first. Obsidian's openWithDefaultApp may return
     // without opening folders, so it must remain a fallback rather than the
@@ -188,18 +200,21 @@ class NmrInboxStore {
   }
 
   async listPendingScans() {
+    if (this.getPlatformError()) throw new Error(this.getPlatformError());
     const configurationError = this.getConfigurationError();
     if (configurationError) throw new Error(configurationError);
     return this.listInboxScans();
   }
 
   async listInboxScans() {
+    if (this.getPlatformError()) throw new Error(this.getPlatformError());
     if (!this.inboxFolder) throw new Error('尚未配置 NMR 待处理目录，请前往 设置 → 科研工作台设置。');
     const root = resolveNmrPath(this.inboxFolder);
     const rootStat = await fs.stat(root);
     if (!rootStat.isDirectory()) throw new Error('待解核磁目录不可用');
     const results = [];
-    await scanDirectory(root, root, results);
+    this.scanErrors = [];
+    await scanDirectory(root, root, results, this.scanErrors);
     return results.sort((a, b) => String(b.modified).localeCompare(String(a.modified)) || a.relativeScanPath.localeCompare(b.relativeScanPath));
   }
 
@@ -498,5 +513,6 @@ module.exports = {
   archiveBatchStatus,
   resolveNmrPath,
   volumeRoot,
+  platformError,
   NmrInboxStore
 };

@@ -23,15 +23,17 @@ const database = require('../plugin/lib/database');
 const nmr = require('../plugin/lib/nmr');
 const ui = require('../plugin/lib/view');
 const { openQuickCreateCommand } = require('../plugin/lib/quick-create-command');
-const { isPermanentEntityId } = require('../plugin/lib/entities/identity');
+const { isPermanentEntityId, validateEntityId } = require('../plugin/lib/entities/identity');
 const { createProject } = require('../plugin/lib/entities/project');
 const { createCompound } = require('../plugin/lib/entities/compound');
 const { createDataAsset } = require('../plugin/lib/entities/data-asset');
-const { NMR_LEDGER_PATH, NMR_LEDGER_ID, parseLedgerEntries, upsertNmrLedger, consolidateLegacyNmrAssets } = require('../plugin/lib/entities/nmr-ledger');
+const { NMR_LEDGER_PATH, NMR_LEDGER_ID, START_MARKER, END_MARKER, parseLedgerEntries, renderLedger, upsertNmrLedger, consolidateLegacyNmrAssets, preflightLegacyNmrAssets } = require('../plugin/lib/entities/nmr-ledger');
 const { PermanentIdMigration } = require('../plugin/lib/migrations/permanent-id');
 const { filterCompoundsByProject, suggestProjectFromCompound } = require('../plugin/lib/experiment-modal');
+const { reconcileRelations } = require('../plugin/lib/nmr-archive-modal');
+const { validateDataAssetRelations } = require('../plugin/lib/modals/data-asset-modal');
 const { EntityStore } = require('../plugin/lib/entities/store');
-const { WorkQueueStore } = require('../plugin/lib/work-queue');
+const { WorkQueueStore, MAX_SCAN_FILES, platformError, summarizeEntry } = require('../plugin/lib/work-queue');
 Module._load = originalLoad;
 
 const tests = [];
@@ -241,6 +243,8 @@ test('UI helpers format relative dates and status tones', () => {
   assert.strictEqual(ui.badgeTone('19F', 'nmr'), 'warning');
   assert.strictEqual(ui.VALID_SECTIONS.has('nmr-inbox'), true);
   assert.strictEqual(ui.VALID_SECTIONS.has('work-queue'), true);
+  assert.strictEqual(ui.DATABASE_TYPE_LABELS.compound, '化合物');
+  assert.strictEqual(ui.DATABASE_TYPE_LABELS['data-asset'], '数据资产');
 });
 
 test('Quick Create command activates a closed view before opening modal', async () => {
@@ -400,8 +404,100 @@ test('NMR ledger stores multiple archives in one Markdown file', async () => {
   await upsertNmrLedger(app, { entryId: 'NMRARC-2', nucleus: '13C', dataPath: 'E:\\NMR\\碳谱\\YLY-1\\11', compound: 'YLY-1', archivedAt: '2026-09-10T01:00:00.000Z', archiveRoot: 'E:\\NMR' });
   const ledger = vault.files.get(NMR_LEDGER_PATH).content;
   assert.match(ledger, /record_id: "DATA-NMR-LEDGER"/);
-  assert.strictEqual(parseLedgerEntries(ledger).length, 2);
+  assert.strictEqual(parseLedgerEntries(ledger).entries.length, 2);
   assert.strictEqual(vault.files.size, 3);
+});
+
+test('damaged NMR ledger is fail-closed and remains byte-identical', async () => {
+  for (const damaged of [
+    '# missing markers',
+    `${START_MARKER}\n| 条目 ID | 核种 | 数据路径 | 课题 | 实验 | 化合物 | 归档时间 |\n| --- | --- | --- | --- | --- | --- | --- |`,
+    `${END_MARKER}\n${START_MARKER}`,
+    `${START_MARKER}\n| 条目 ID | 核种 | 数据路径 | 课题 | 实验 | 化合物 | 归档时间 |\n| --- | --- | --- | --- | --- | --- | --- |\n| broken | 1H | only-three | ${END_MARKER}`
+  ]) {
+    const vault = auditVault();
+    const file = { path: NMR_LEDGER_PATH, content: damaged };
+    vault.files.set(NMR_LEDGER_PATH, file);
+    const before = file.content;
+    await assert.rejects(() => upsertNmrLedger({ vault }, { entryId: 'NMRARC-X', nucleus: '1H', dataPath: 'E:\\NMR\\x' }), /台账结构异常/);
+    assert.strictEqual(file.content, before);
+  }
+});
+
+test('archive move succeeds but damaged ledger returns partial failure without overwriting ledger', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-damaged-archive-'));
+  const inbox = path.join(root, 'inbox'); const archive = path.join(root, 'archive');
+  await fs.mkdir(inbox, { recursive: true }); const source = await makeScan(inbox, 'damaged-ledger', '1H', true);
+  const vault = auditVault(); const damaged = { path: NMR_LEDGER_PATH, content: 'manually damaged' }; vault.files.set(NMR_LEDGER_PATH, damaged);
+  const result = await new nmr.NmrInboxStore(pluginFor(inbox, archive, vault)).archiveSelected(['damaged-ledger']);
+  assert.strictEqual(result.status, 'partial_failure'); assert.strictEqual(result.registrationErrors.length, 1); assert.strictEqual(damaged.content, 'manually damaged');
+  assert.strictEqual(await fs.access(path.join(archive, '氢谱', 'damaged-ledger')).then(() => true), true); assert.strictEqual(await fs.access(source).then(() => true).catch(() => false), false);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test('existing ledger archive root survives legacy migration when input root is empty', async () => {
+  const vault = auditVault(); const app = { vault };
+  await upsertNmrLedger(app, { entryId: 'NMRARC-BASE', nucleus: '1H', dataPath: 'E:\\NMR\\base', archiveRoot: 'E:\\NMR-ARCHIVE' });
+  const legacy = { path: '00-博士工作台/04-数据资产/legacy-root.md', basename: 'legacy-root', extension: 'md' }; vault.files.set(legacy.path, legacy); vault.getMarkdownFiles = () => [...vault.files.values()].filter((file) => file.extension === 'md'); vault.trash = async (file) => vault.files.delete(file.path);
+  const metadata = new Map([[legacy, { kind: 'data-asset', asset_type: 'nmr', record_id: 'DATA-LEGACY-ROOT', data_path: 'E:\\NMR\\legacy', title: '1H NMR' }]]);
+  app.metadataCache = { getFileCache: (file) => ({ frontmatter: metadata.get(file) || {} }) };
+  const result = await consolidateLegacyNmrAssets(app); assert.strictEqual(result.status, 'completed');
+  assert.match(vault.files.get(NMR_LEDGER_PATH).content, /data_path:.*NMR-ARCHIVE/);
+});
+
+test('malformed acqus is listed as unknown without hiding valid NMR scans', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-malformed-acqus-')); const inbox = path.join(root, 'inbox'); const archive = path.join(root, 'archive');
+  await fs.mkdir(inbox, { recursive: true }); await makeScan(inbox, 'valid', '1H', true); await fs.mkdir(path.join(inbox, 'malformed'), { recursive: true }); await fs.writeFile(path.join(inbox, 'malformed', 'acqus'), 'not a Bruker header', 'utf8');
+  const store = new nmr.NmrInboxStore(pluginFor(inbox, archive)); const scans = await store.listInboxScans(); assert.strictEqual(scans.length, 2); assert.strictEqual(scans.find((scan) => scan.relativeScanPath === 'malformed').nucleus, 'unknown'); await fs.rm(root, { recursive: true, force: true });
+});
+
+test('duplicate legacy IDs and existing migration entry IDs fail closed before trash', async () => {
+  const vault = auditVault();
+  const first = { path: '00-博士工作台/04-数据资产/dup-1.md', basename: 'dup-1', extension: 'md' };
+  const second = { path: '00-博士工作台/04-数据资产/dup-2.md', basename: 'dup-2', extension: 'md' };
+  vault.files.set(first.path, first); vault.files.set(second.path, second); vault.getMarkdownFiles = () => [first, second]; vault.trash = async (file) => vault.files.delete(file.path);
+  const metadata = new Map([[first, { kind: 'data-asset', asset_type: 'nmr', record_id: 'DATA-OLD-1', data_path: 'E:\\NMR\\1', title: '1H' }], [second, { kind: 'data-asset', asset_type: 'nmr', record_id: 'DATA-OLD-1', data_path: 'E:\\NMR\\2', title: '1H' }]]);
+  vault.getAbstractFileByPath = (value) => vault.files.get(value) || null;
+  const app = { vault, metadataCache: { getFileCache: (file) => ({ frontmatter: metadata.get(file) || {} }) } };
+  const preflight = await preflightLegacyNmrAssets(app); assert.ok(preflight.errors.some((error) => /重复 record_id/.test(error)));
+  const result = await consolidateLegacyNmrAssets(app); assert.strictEqual(result.status, 'failed'); assert.strictEqual(result.migrated.length, 0); assert.strictEqual(vault.files.has(first.path), true); assert.strictEqual(vault.files.has(second.path), true);
+});
+
+test('entity ID validator is shared by integrity and selectors', () => {
+  assert.strictEqual(validateEntityId('PROJ-1', 'project').valid, true); assert.strictEqual(validateEntityId('EXP-1', 'project').valid, false);
+  const result = database.validateRelationships([{ id: 'EXP-1', type: 'project', path: 'p.md' }, { id: 'PROJ-1', type: 'experiment', path: 'e.md' }, { id: 'DATA-1', type: 'compound', path: 'c.md' }]);
+  assert.strictEqual(result.issues.filter((issue) => issue.type === 'invalid_record_id').length, 3);
+});
+
+test('relation state clears incompatible children and rejects contradictory DataAsset links', () => {
+  const relations = reconcileRelations({ projectId: 'PROJ-A', project: 'A', experimentId: 'EXP-A', experiment: 'A1', compoundId: 'CMP-A', compound: 'A1', projectItems: [{ id: 'PROJ-B', title: 'B' }] }, 'PROJ-B', [{ id: 'EXP-A', projectId: 'PROJ-A' }], [{ id: 'CMP-A', projectId: 'PROJ-A' }]);
+  assert.strictEqual(relations.experimentId, ''); assert.strictEqual(relations.compoundId, '');
+  const store = { listProjects: () => [{ id: 'PROJ-A' }], listExperiments: () => [{ id: 'EXP-B', projectId: 'PROJ-B', compoundId: 'CMP-B' }], listCompounds: () => [{ id: 'CMP-B', projectId: 'PROJ-B' }] };
+  assert.ok(validateDataAssetRelations({ projectId: 'PROJ-A', experimentId: 'EXP-B', compoundId: 'CMP-B' }, store).length);
+  assert.strictEqual(validateDataAssetRelations({ projectId: '', experimentId: 'EXP-B', compoundId: '' }, store).length, 0);
+});
+
+test('unsupported platform is explicit for NMR and work queue', async () => {
+  const store = new nmr.NmrInboxStore(pluginFor('C:\\inbox', 'C:\\archive'), { platform: 'linux' });
+  await assert.rejects(() => store.listPendingScans(), /仅支持 Windows/);
+  const queue = new WorkQueueStore({ settings: { processingInboxFolder: 'C:\\data' } }, { platform: 'linux' });
+  await assert.rejects(() => queue.listSource('data'), /仅支持 Windows/); assert.match(platformError('linux'), /仅支持 Windows/);
+});
+
+test('concurrent ledger writes preserve entries and a failed write does not poison the queue', async () => {
+  const vault = auditVault(); const app = { vault };
+  await Promise.all([upsertNmrLedger(app, { entryId: 'CONCURRENT-1', nucleus: '1H', dataPath: 'E:\\1' }), upsertNmrLedger(app, { entryId: 'CONCURRENT-2', nucleus: '13C', dataPath: 'E:\\2' })]);
+  assert.strictEqual(parseLedgerEntries(vault.files.get(NMR_LEDGER_PATH).content).entries.length, 2);
+  const originalModify = vault.modify; let failed = false; vault.modify = async (file, content) => { if (!failed) { failed = true; throw new Error('temporary'); } return originalModify(file, content); };
+  await assert.rejects(() => upsertNmrLedger(app, { entryId: 'CONCURRENT-3', nucleus: '1H', dataPath: 'E:\\3' }));
+  await upsertNmrLedger(app, { entryId: 'CONCURRENT-4', nucleus: '1H', dataPath: 'E:\\4' });
+  assert.ok(parseLedgerEntries(vault.files.get(NMR_LEDGER_PATH).content).entries.some((entry) => entry.entryId === 'CONCURRENT-4'));
+});
+
+test('work queue scan is bounded for large directories', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phdcc-bound-')); const folder = path.join(root, 'large'); await fs.mkdir(folder, { recursive: true });
+  await Promise.all(Array.from({ length: MAX_SCAN_FILES + 20 }, (_, index) => fs.writeFile(path.join(folder, `f-${index}.txt`), 'x')));
+  const entry = await summarizeEntry(root, { name: 'large', isDirectory: () => true }); assert.strictEqual(entry.truncated, true); assert.strictEqual(entry.fileCount, MAX_SCAN_FILES); await fs.rm(root, { recursive: true, force: true });
 });
 
 test('legacy single-file NMR assets consolidate into the ledger and move to vault trash', async () => {
@@ -418,7 +514,7 @@ test('legacy single-file NMR assets consolidate into the ledger and move to vaul
   const result = await consolidateLegacyNmrAssets({ vault, metadataCache: { getFileCache: (file) => ({ frontmatter: metadata.get(file) || {} }) } });
   assert.strictEqual(result.migrated.length, 2);
   assert.strictEqual(vault.files.has(first.path), false);
-  assert.strictEqual(parseLedgerEntries(vault.files.get(NMR_LEDGER_PATH).content).length, 2);
+  assert.strictEqual(parseLedgerEntries(vault.files.get(NMR_LEDGER_PATH).content).entries.length, 2);
 });
 
 test('NMR audit failure prevents moving source data', async () => {

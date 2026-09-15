@@ -36,6 +36,6 @@ npm run build
 
 构建后，将 `plugin/main.js`、`plugin/manifest.json` 和 `plugin/styles.css` 复制到 Obsidian vault 的 `.obsidian/plugins/phd-command-center/`。
 
-本版本声明为 Desktop-only，因为 NMR 文件系统集成使用 Node.js/Electron API。核心 Markdown、任务和数据库逻辑保持本地优先，未来可进一步拆分移动端能力。
+本版本声明为 Desktop-only；外部科研数据目录、NMR 管理、待处理队列和 Explorer 跳转当前仅支持 Windows。核心 Markdown、任务和数据库逻辑保持本地优先。
 
 详细功能和数据路径说明见 [`plugin/README.md`](plugin/README.md)。

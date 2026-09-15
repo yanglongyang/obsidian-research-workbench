@@ -53,6 +53,7 @@ function normalizeLocalRequires(id, source) {
       .replace("require('./ui/page-renderers')", "require('./lib/ui/page-renderers')");
   }
   if (id === './lib/ui/page-renderers') return source;
+  if (id === './lib/database') return source.replace("require('./entities/identity')", "require('./lib/entities/identity')");
   if (id === './lib/entities/store') {
     return source
       .replace("require('./project')", "require('./lib/entities/project')")

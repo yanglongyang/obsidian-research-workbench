@@ -106,12 +106,13 @@ class ExperimentModal extends Modal {
     if (!this.relationContainer || !store) return;
     this.relationContainer.empty();
     const projects = store.listProjects();
-    const compounds = filterCompoundsByProject(store.listCompounds(), this.state.projectId);
+    const allCompounds = store.listCompounds();
+    const compounds = filterCompoundsByProject(allCompounds, this.state.projectId);
     new Setting(this.relationContainer).setName('关联课题（可选）').addDropdown((dropdown) => {
       dropdown.addOption('', '不关联');
       projects.forEach((item) => dropdown.addOption(item.id, `${item.title} · ${item.id}`));
       dropdown.setValue(this.state.projectId);
-      dropdown.onChange((value) => { this.state.projectId = value; const item = projects.find((candidate) => candidate.id === value); this.state.project = item?.title || ''; this.renderRelationSelectors(); });
+      dropdown.onChange((value) => { this.state.projectId = value; const item = projects.find((candidate) => candidate.id === value); this.state.project = item?.title || ''; const selectedCompound = allCompounds.find((candidate) => candidate.id === this.state.compoundId); if (selectedCompound?.projectId && value && selectedCompound.projectId !== value) { this.state.compoundId = ''; this.state.compound = ''; } this.renderRelationSelectors(); });
     });
     new Setting(this.relationContainer).setName('关联化合物（可选）').addDropdown((dropdown) => {
       dropdown.addOption('', '不关联');

@@ -1,5 +1,5 @@
 const { Modal, Notice } = require('obsidian');
-const { legacyNmrAssets, consolidateLegacyNmrAssets } = require('../entities/nmr-ledger');
+const { preflightLegacyNmrAssets, consolidateLegacyNmrAssets } = require('../entities/nmr-ledger');
 
 class NmrLedgerMigrationModal extends Modal {
   constructor(app, options = {}) {
@@ -8,6 +8,7 @@ class NmrLedgerMigrationModal extends Modal {
     this.items = [];
     this.confirmed = false;
     this.busy = false;
+    this.preflight = null;
   }
 
   onOpen() {
@@ -15,8 +16,7 @@ class NmrLedgerMigrationModal extends Modal {
     this.contentEl.createEl('h2', { text: '合并旧核磁数据资产' });
     this.contentEl.createDiv({ cls: 'phdcc-empty', text: '旧的“每套一份”NMR 数据资产会被写入 NMR 归档台账；确认成功后，原单条笔记将移入 Obsidian 回收站，可恢复。原始核磁数据文件不会移动或删除。' });
     this.body = this.contentEl.createDiv();
-    this.items = legacyNmrAssets(this.app);
-    this.renderPreview();
+    this.body.createDiv({ cls: 'phdcc-empty', text: '正在检查重复 ID、路径冲突和台账结构…' });
     const confirmation = this.contentEl.createDiv({ cls: 'phdcc-archive-checks' });
     this.checkbox = confirmation.createEl('input', { attr: { type: 'checkbox', 'aria-label': '确认合并旧核磁数据资产' } });
     confirmation.createSpan({ text: '我确认将这些旧单条笔记合并，并移入 Obsidian 回收站。' });
@@ -27,19 +27,30 @@ class NmrLedgerMigrationModal extends Modal {
     this.button = footer.createEl('button', { text: '无需合并', cls: 'mod-cta', type: 'button' });
     this.button.addEventListener('click', () => { void this.submit(); });
     this.updateButton();
+    void this.prepare();
+  }
+
+  async prepare() {
+    try { this.preflight = await preflightLegacyNmrAssets(this.app); this.items = this.preflight.items; }
+    catch (error) { this.preflight = { items: [], errors: [error instanceof Error ? error.message : String(error)], warnings: [] }; this.items = []; }
+    this.renderPreview();
+    this.updateButton();
   }
 
   renderPreview() {
     this.body.empty();
-    if (!this.items.length) return void this.body.createDiv({ cls: 'phdcc-empty', text: '没有发现旧的单条 NMR 数据资产。' });
+    if (this.preflight?.errors?.length) this.preflight.errors.forEach((error) => this.body.createDiv({ cls: 'phdcc-file-next', text: `阻塞：${error}` }));
+    if (this.preflight?.warnings?.length) this.preflight.warnings.forEach((warning) => this.body.createDiv({ cls: 'phdcc-file-next', text: `警告：${warning}` }));
+    if (!this.items.length) return void this.body.createDiv({ cls: 'phdcc-empty', text: this.preflight?.errors?.length || this.preflight?.warnings?.length ? '存在冲突或潜在信息损失，已阻止整批迁移。' : '没有发现旧的单条 NMR 数据资产。' });
     this.body.createDiv({ cls: 'phdcc-file-meta', text: `将合并 ${this.items.length} 条：` });
     this.items.forEach(({ file, frontmatter }) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${frontmatter.title || file.basename} · ${file.path}` }));
   }
 
   updateButton() {
     if (!this.button) return;
-    this.button.disabled = this.busy || !this.items.length || !this.confirmed;
-    this.button.setText(this.busy ? '合并中…' : !this.items.length ? '无需合并' : !this.confirmed ? '请先确认' : `合并 ${this.items.length} 条记录`);
+    const blocked = this.preflight?.errors?.length || this.preflight?.warnings?.length;
+    this.button.disabled = this.busy || !this.items.length || blocked || !this.confirmed;
+    this.button.setText(this.busy ? '合并中…' : blocked ? '存在阻塞项' : !this.items.length ? '无需合并' : !this.confirmed ? '请先确认' : `合并 ${this.items.length} 条记录`);
   }
 
   async submit() {

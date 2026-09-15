@@ -357,6 +357,7 @@ const DB_FILE = `${DB_FOLDER}/records.json`;
 const AUDIT_FOLDER = '00-博士工作台/应用数据/审计';
 const AUDIT_FILE = `${AUDIT_FOLDER}/nmr-archive.jsonl`;
 const DATABASE_SCHEMA_VERSION = 3;
+const { validateEntityId, expectedPrefixForType } = require('./lib/entities/identity');
 const MANAGED_FOLDERS = ['00-博士工作台', '实验记录', '文献', '文献阅读', 'DMAC_AIE_PET_调研'];
 
 function normalizePath(value) {
@@ -441,6 +442,11 @@ function validateRelationships(records) {
   const byId = new Map();
   list.forEach((record) => { if (record?.id) { if (!byId.has(record.id)) byId.set(record.id, []); byId.get(record.id).push(record); } });
   const issues = [];
+  list.forEach((source) => {
+    if (!source?.id) return;
+    const validation = validateEntityId(source.id, source.type);
+    if (!validation.valid && expectedPrefixForType(source.type)) issues.push({ type: 'invalid_record_id', sourcePath: source.path, sourceId: source.id, expectedPrefix: validation.expectedPrefix, actualId: source.id, message: `record_id 前缀无效：${source.id}（应为 ${validation.expectedPrefix}）` });
+  });
   const duplicateIds = [...byId.entries()].filter(([, matches]) => matches.length > 1);
   duplicateIds.forEach(([id, matches]) => matches.forEach((source) => issues.push({ type: 'duplicate_record_id', sourcePath: source.path, sourceId: source.id, field: 'record_id', targetId: id, message: `record_id 重复：${id}` })));
   let validRelationCount = 0;
@@ -836,88 +842,78 @@ const NMR_LEDGER_PATH = `${DATA_ASSET_FOLDER}/NMR 归档台账.md`;
 const NMR_LEDGER_ID = 'DATA-NMR-LEDGER';
 const START_MARKER = '<!-- NMR_LEDGER_ENTRIES_START -->';
 const END_MARKER = '<!-- NMR_LEDGER_ENTRIES_END -->';
+let ledgerWriteQueue = Promise.resolve();
 
 function yamlString(value) { return JSON.stringify(String(value ?? '')); }
 function cell(value) { return String(value ?? '').replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|').trim() || '—'; }
 function isNmrLedgerPath(value) { return String(value || '').replace(/\\/g, '/') === NMR_LEDGER_PATH; }
+function serializeTableLine(line) {
+  const raw = String(line || '').trim();
+  if (!raw.startsWith('|') || !raw.endsWith('|')) return null;
+  const values = []; let current = '';
+  for (let index = 1; index < raw.length - 1; index += 1) {
+    const char = raw[index];
+    if (char === '\\' && raw[index + 1] === '|') { current += '|'; index += 1; continue; }
+    if (char === '|') { values.push(current.trim()); current = ''; continue; }
+    current += char;
+  }
+  values.push(current.trim());
+  return values;
+}
 
 function renderLedger(entries, archiveRoot = '', timestamps = {}) {
   const created = timestamps.created || new Date().toISOString();
   const updated = timestamps.updated || new Date().toISOString();
   const rows = entries.map((entry) => `| ${cell(entry.entryId)} | ${cell(entry.nucleus)} | ${cell(entry.dataPath)} | ${cell(entry.project || entry.projectId)} | ${cell(entry.experiment || entry.experimentId)} | ${cell(entry.compound || entry.compoundId)} | ${cell(entry.archivedAt)} |`).join('\n');
-  return [
-    '---',
-    `record_id: ${yamlString(NMR_LEDGER_ID)}`,
-    'kind: data-asset',
-    `title: ${yamlString('NMR 归档台账')}`,
-    `asset_type: ${yamlString('nmr')}`,
-    `data_path: ${yamlString(archiveRoot)}`,
-    `status: ${yamlString('available')}`,
-    `created: ${yamlString(created)}`,
-    `updated: ${yamlString(updated)}`,
-    'tags:',
-    '  - research/data',
-    '  - research/nmr',
-    '---',
-    '# NMR 归档台账',
-    '',
-    '每行对应一套已归档的核磁原始数据。可直接编辑此表；原始目录的实际位置以“数据路径”为准。',
-    '',
-    '## 归档记录',
-    '',
-    START_MARKER,
-    '| 条目 ID | 核种 | 数据路径 | 课题 | 实验 | 化合物 | 归档时间 |',
-    '| --- | --- | --- | --- | --- | --- | --- |',
-    rows,
-    END_MARKER,
-    ''
-  ].join('\n');
+  return ['---', `record_id: ${yamlString(NMR_LEDGER_ID)}`, 'kind: data-asset', `title: ${yamlString('NMR 归档台账')}`, `asset_type: ${yamlString('nmr')}`, `data_path: ${yamlString(archiveRoot)}`, `status: ${yamlString('available')}`, `created: ${yamlString(created)}`, `updated: ${yamlString(updated)}`, 'tags:', '  - research/data', '  - research/nmr', '---', '# NMR 归档台账', '', '每行对应一套已归档的核磁原始数据。可直接编辑此表；原始目录的实际位置以“数据路径”为准。', '', '## 归档记录', '', START_MARKER, '| 条目 ID | 核种 | 数据路径 | 课题 | 实验 | 化合物 | 归档时间 |', '| --- | --- | --- | --- | --- | --- | --- |', rows, END_MARKER, ''].join('\n');
 }
 
 function parseLedgerEntries(content) {
-  const start = String(content || '').indexOf(START_MARKER);
-  const end = String(content || '').indexOf(END_MARKER);
-  if (start < 0 || end < 0 || end <= start) return [];
-  return String(content).slice(start + START_MARKER.length, end).split('\n').slice(3).map((line) => {
-    const cells = line.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map((value) => value.trim().replace(/\\\|/g, '|'));
-    if (cells.length < 7 || !cells[0] || cells[0] === '—') return null;
-    return { entryId: cells[0], nucleus: cells[1], dataPath: cells[2], project: cells[3], experiment: cells[4], compound: cells[5], archivedAt: cells[6] };
-  }).filter(Boolean);
+  const text = String(content || '');
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const startMatches = text.match(new RegExp(escape(START_MARKER), 'g')) || [];
+  const endMatches = text.match(new RegExp(escape(END_MARKER), 'g')) || [];
+  const start = text.indexOf(START_MARKER); const end = text.indexOf(END_MARKER);
+  if (startMatches.length !== 1 || endMatches.length !== 1 || start < 0 || end <= start) return { ok: false, entries: [], error: 'NMR 台账 marker 缺失、重复或顺序错误' };
+  const region = text.slice(start + START_MARKER.length, end).split('\n').map((line) => line.trim()).filter(Boolean);
+  if (region.length < 2) return { ok: false, entries: [], error: 'NMR 台账表头不完整' };
+  const header = serializeTableLine(region[0]); const divider = serializeTableLine(region[1]);
+  if (!header || header.length !== 7 || header[0] !== '条目 ID' || !divider || divider.length !== 7 || divider.some((value) => !/^:?-{3,}:?$/.test(value))) return { ok: false, entries: [], error: 'NMR 台账表格表头异常' };
+  const entries = [];
+  for (const line of region.slice(2)) {
+    const values = serializeTableLine(line);
+    if (!values || values.length !== 7 || values.some((value) => !value)) return { ok: false, entries: [], error: 'NMR 台账表格正文异常' };
+    entries.push({ entryId: values[0], nucleus: values[1], dataPath: values[2], project: values[3] === '—' ? '' : values[3], experiment: values[4] === '—' ? '' : values[4], compound: values[5] === '—' ? '' : values[5], archivedAt: values[6] === '—' ? '' : values[6] });
+  }
+  const ids = new Set();
+  for (const entry of entries) { if (ids.has(entry.entryId)) return { ok: false, entries: [], error: `NMR 台账存在重复条目 ID：${entry.entryId}` }; ids.add(entry.entryId); }
+  return { ok: true, entries, error: '' };
 }
 
+function readFrontmatterScalar(content, key) { const match = String(content || '').match(new RegExp(`^${key}:\\s*["']?([^\\n"']*)`, 'm')); return match ? match[1].trim() : ''; }
+function withLedgerLock(task) { const run = ledgerWriteQueue.then(task, task); ledgerWriteQueue = run.catch(() => undefined); return run; }
+
 async function upsertNmrLedger(app, input) {
-  if (!app?.vault) throw new Error('Obsidian Vault 不可用，无法登记 NMR 台账');
-  const entryId = String(input?.entryId || '').trim();
-  const dataPath = String(input?.dataPath || '').trim();
-  if (!entryId || !dataPath) throw new Error('NMR 台账条目缺少 ID 或数据路径');
-  await ensureFolder(app.vault, DATA_ASSET_FOLDER);
-  const existing = app.vault.getAbstractFileByPath(NMR_LEDGER_PATH);
-  const now = new Date().toISOString();
-  let entries = [];
-  let created = now;
-  if (existing) {
-    const content = await app.vault.read(existing);
-    entries = parseLedgerEntries(content);
-    const createdMatch = content.match(/^created:\s*["']?([^\n"']+)/m);
-    created = createdMatch?.[1]?.trim() || now;
-  }
-  const entry = {
-    entryId,
-    nucleus: String(input.nucleus || ''),
-    dataPath,
-    projectId: String(input.projectId || ''), project: String(input.project || ''),
-    experimentId: String(input.experimentId || ''), experiment: String(input.experiment || ''),
-    compoundId: String(input.compoundId || ''), compound: String(input.compound || ''),
-    archivedAt: String(input.archivedAt || now)
-  };
-  const index = entries.findIndex((item) => item.entryId === entryId);
-  if (index >= 0) entries[index] = entry;
-  else entries.push(entry);
-  const content = renderLedger(entries, String(input.archiveRoot || ''), { created, updated: now });
-  let file = existing;
-  if (!file) file = await app.vault.create(NMR_LEDGER_PATH, content);
-  else await app.vault.modify(file, content);
-  return { file, ledgerId: NMR_LEDGER_ID, entryId, created: !existing, entryCount: entries.length };
+  return withLedgerLock(async () => {
+    if (!app?.vault) throw new Error('Obsidian Vault 不可用，无法登记 NMR 台账');
+    const entryId = String(input?.entryId || '').trim(); const dataPath = String(input?.dataPath || '').trim();
+    if (!entryId || !dataPath) throw new Error('NMR 台账条目缺少 ID 或数据路径');
+    await ensureFolder(app.vault, DATA_ASSET_FOLDER);
+    const existing = app.vault.getAbstractFileByPath(NMR_LEDGER_PATH); const now = new Date().toISOString();
+    let entries = []; let created = now; let existingArchiveRoot = '';
+    if (existing) {
+      const previous = await app.vault.read(existing); const parsed = parseLedgerEntries(previous);
+      if (!parsed.ok) throw new Error(`NMR 台账结构异常，为避免覆盖历史记录，已停止写入：${parsed.error}`);
+      entries = parsed.entries; created = readFrontmatterScalar(previous, 'created') || now; existingArchiveRoot = readFrontmatterScalar(previous, 'data_path');
+    }
+    const entry = { entryId, nucleus: String(input.nucleus || ''), dataPath, projectId: String(input.projectId || ''), project: String(input.project || ''), experimentId: String(input.experimentId || ''), experiment: String(input.experiment || ''), compoundId: String(input.compoundId || ''), compound: String(input.compound || ''), archivedAt: String(input.archivedAt || now) };
+    const index = entries.findIndex((item) => item.entryId === entryId); if (index >= 0) entries[index] = entry; else entries.push(entry);
+    const content = renderLedger(entries, String(input.archiveRoot || '').trim() || existingArchiveRoot, { created, updated: now });
+    const file = existing || await app.vault.create(NMR_LEDGER_PATH, content); if (existing) await app.vault.modify(file, content);
+    const verified = parseLedgerEntries(await app.vault.read(file));
+    if (!verified.ok || !verified.entries.some((item) => item.entryId === entryId && item.dataPath === dataPath)) throw new Error('NMR 台账写入后校验失败，为避免不一致，未确认登记成功');
+    return { file, ledgerId: NMR_LEDGER_ID, entryId, created: !existing, entryCount: verified.entries.length };
+  });
 }
 
 function legacyNmrAssets(app) {
@@ -925,48 +921,71 @@ function legacyNmrAssets(app) {
   return app.vault.getMarkdownFiles().filter((file) => file.path.startsWith(`${DATA_ASSET_FOLDER}/`) && !isNmrLedgerPath(file.path)).map((file) => ({ file, frontmatter: app.metadataCache.getFileCache(file)?.frontmatter || {} })).filter(({ frontmatter }) => frontmatter.kind === 'data-asset' && frontmatter.asset_type === 'nmr');
 }
 
-async function consolidateLegacyNmrAssets(app) {
-  const items = legacyNmrAssets(app);
-  const migrated = [];
-  const skipped = [];
-  const failed = [];
-  for (const { file, frontmatter } of items) {
-    const dataPath = String(frontmatter.data_path || '').trim();
-    const entryId = String(frontmatter.record_id || '').trim();
-    if (!dataPath || !entryId) { skipped.push({ file, reason: '缺少 record_id 或 data_path' }); continue; }
+async function preflightLegacyNmrAssets(app) {
+  const items = legacyNmrAssets(app); const errors = []; const warnings = []; const seenIds = new Map(); const seenPaths = new Map(); let ledgerEntries = [];
+  const ledger = app?.vault?.getAbstractFileByPath(NMR_LEDGER_PATH);
+  if (ledger) { const parsed = parseLedgerEntries(await app.vault.read(ledger)); if (!parsed.ok) errors.push(`现有 NMR 台账无法解析：${parsed.error}`); else ledgerEntries = parsed.entries; }
+  for (const item of items) {
+    const id = String(item.frontmatter.record_id || '').trim(); const dataPath = String(item.frontmatter.data_path || '').trim();
+    if (!id) errors.push(`${item.file.path}：缺少 record_id`); if (!dataPath) errors.push(`${item.file.path}：缺少 data_path`);
+    if (id) { if (seenIds.has(id)) errors.push(`重复 record_id：${id}（${seenIds.get(id)} 与 ${item.file.path}）`); else seenIds.set(id, item.file.path); }
+    if (dataPath) { if (seenPaths.has(dataPath)) errors.push(`重复 data_path：${dataPath}（${seenPaths.get(dataPath)} 与 ${item.file.path}）`); else seenPaths.set(dataPath, item.file.path); }
+    if (dataPath && ledgerEntries.some((entry) => entry.dataPath === dataPath)) errors.push(`${item.file.path}：data_path 已存在于 NMR 台账：${dataPath}`);
+    if (id && ledgerEntries.some((entry) => entry.entryId === `LEGACY-${id}`)) errors.push(`${item.file.path}：迁移 entry ID 已存在：LEGACY-${id}`);
+    const lossy = [];
+    if (String(item.frontmatter.status || '').trim() && String(item.frontmatter.status).trim() !== 'available') lossy.push('status');
+    if (String(item.frontmatter.notes || '').trim()) lossy.push('notes');
+    // Legacy data-asset notes are normally stored in the markdown body under
+    // `## 备注`, not in frontmatter. Read the body during preflight so a
+    // migration never silently discards researcher-entered notes.
     try {
-      await upsertNmrLedger(app, {
-        entryId: `LEGACY-${entryId}`,
-        nucleus: /13C/i.test(String(frontmatter.title || '')) ? '13C' : /1H/i.test(String(frontmatter.title || '')) ? '1H' : 'NMR',
-        dataPath,
-        projectId: frontmatter.project_id, project: frontmatter.project,
-        experimentId: frontmatter.experiment_id, experiment: frontmatter.experiment,
-        compoundId: frontmatter.compound_id, compound: frontmatter.compound,
-        archivedAt: frontmatter.updated || frontmatter.created || frontmatter.acquired_at,
-        archiveRoot: ''
-      });
-      await app.vault.trash(file, false);
-      migrated.push(file);
+      const body = await app.vault.read(item.file);
+      const noteSection = String(body || '').match(/(?:^|\n)##\s*备注\s*\n([\s\S]*?)(?=\n##\s|\s*$)/);
+      if (noteSection && noteSection[1].trim()) lossy.push('notes');
     } catch (error) {
-      failed.push({ file, error: error instanceof Error ? error.message : String(error) });
+      errors.push(`${item.file.path}：无法读取正文，已停止迁移（${error instanceof Error ? error.message : String(error)}）`);
     }
+    if (lossy.length) warnings.push(`${item.file.path}：以下字段无法完整写入台账：${[...new Set(lossy)].join('、')}`);
   }
-  return { migrated, skipped, failed };
+  return { items, errors, warnings, ledgerEntries };
 }
 
-module.exports = { NMR_LEDGER_PATH, NMR_LEDGER_ID, isNmrLedgerPath, parseLedgerEntries, renderLedger, upsertNmrLedger, legacyNmrAssets, consolidateLegacyNmrAssets };
+async function consolidateLegacyNmrAssets(app) {
+  const preflight = await preflightLegacyNmrAssets(app);
+  if (preflight.errors.length || preflight.warnings.length) return { status: 'failed', migrated: [], skipped: preflight.items.map(({ file }) => ({ file, reason: preflight.errors.join('；') || preflight.warnings.join('；') })), failed: [], errors: preflight.errors, warnings: preflight.warnings };
+  const migrated = []; const skipped = []; const failed = [];
+  for (const { file, frontmatter } of preflight.items) {
+    const id = String(frontmatter.record_id).trim(); const dataPath = String(frontmatter.data_path).trim();
+    try {
+      const result = await upsertNmrLedger(app, { entryId: `LEGACY-${id}`, nucleus: /13C/i.test(String(frontmatter.title || '')) ? '13C' : /1H/i.test(String(frontmatter.title || '')) ? '1H' : 'NMR', dataPath, projectId: frontmatter.project_id, project: frontmatter.project, experimentId: frontmatter.experiment_id, experiment: frontmatter.experiment, compoundId: frontmatter.compound_id, compound: frontmatter.compound, archivedAt: frontmatter.updated || frontmatter.created || frontmatter.acquired_at, archiveRoot: '' });
+      const ledger = app.vault.getAbstractFileByPath(NMR_LEDGER_PATH); const parsed = ledger ? parseLedgerEntries(await app.vault.read(ledger)) : { ok: false, entries: [] }; const verified = parsed.ok && parsed.entries.some((entry) => entry.entryId === result.entryId && entry.dataPath === dataPath);
+      if (!verified) { failed.push({ file, error: '写入后回读未找到匹配台账条目，原笔记未移入回收站' }); continue; }
+      if (typeof app.vault.trash !== 'function') throw new Error('Obsidian Vault 不支持可恢复回收站');
+      await app.vault.trash(file, false); migrated.push(file);
+    } catch (error) { failed.push({ file, error: error instanceof Error ? error.message : String(error) }); }
+  }
+  return { status: failed.length ? (migrated.length ? 'partial_failure' : 'failed') : 'completed', migrated, skipped, failed, errors: [], warnings: [] };
+}
+
+module.exports = { NMR_LEDGER_PATH, NMR_LEDGER_ID, START_MARKER, END_MARKER, isNmrLedgerPath, parseLedgerEntries, renderLedger, upsertNmrLedger, legacyNmrAssets, preflightLegacyNmrAssets, consolidateLegacyNmrAssets };
 
 },
 "./lib/entities/identity": function (module, exports, require) {
 const PREFIX_BY_ENTITY = { project: 'PROJ-', experiment: 'EXP-', compound: 'CMP-', 'data-asset': 'DATA-', task: 'TASK-' };
 
 function isPermanentEntityId(id, type) {
-  const value = String(id || '').trim();
-  const prefix = PREFIX_BY_ENTITY[type];
-  return Boolean(prefix && value.startsWith(prefix) && value.length > prefix.length && !value.startsWith('LEGACY-'));
+  return validateEntityId(id, type).valid;
 }
 
-module.exports = { PREFIX_BY_ENTITY, isPermanentEntityId };
+function expectedPrefixForType(type) { return PREFIX_BY_ENTITY[type] || ''; }
+function validateEntityId(id, type) {
+  const value = String(id || '').trim();
+  const expectedPrefix = expectedPrefixForType(type);
+  const valid = Boolean(expectedPrefix && value.startsWith(expectedPrefix) && value.length > expectedPrefix.length && !value.startsWith('LEGACY-'));
+  return { valid, id: value, type, expectedPrefix, reason: valid ? '' : (!expectedPrefix ? 'unknown_type' : 'invalid_prefix') };
+}
+
+module.exports = { PREFIX_BY_ENTITY, expectedPrefixForType, validateEntityId, isPermanentEntityId };
 
 },
 "./lib/ui/page-renderers": function (module, exports, require) {
@@ -988,7 +1007,7 @@ const { PROJECT_ENTITY_FOLDER } = require('./lib/entities/project');
 const { COMPOUND_FOLDER } = require('./lib/entities/compound');
 const { DATA_ASSET_FOLDER } = require('./lib/entities/data-asset');
 const { EXPERIMENT_FOLDERS } = require('./lib/data');
-const { isPermanentEntityId } = require('./lib/entities/identity');
+const { isPermanentEntityId, validateEntityId } = require('./lib/entities/identity');
 
 function text(value) { return typeof value === 'string' ? value.trim() : ''; }
 function inFolder(file, folders) {
@@ -1023,10 +1042,10 @@ class EntityStore {
     })).sort((a, b) => a.title.localeCompare(b.title));
   }
 
-  listProjects() { return this.list('project').filter((item) => isPermanentEntityId(item.id, 'project')); }
-  listExperiments() { return this.list('experiment').filter((item) => isPermanentEntityId(item.id, 'experiment')); }
-  listCompounds() { return this.list('compound').filter((item) => isPermanentEntityId(item.id, 'compound')); }
-  listDataAssets() { return this.list('data-asset').filter((item) => isPermanentEntityId(item.id, 'data-asset')); }
+  listProjects() { return this.list('project').filter((item) => validateEntityId(item.id, 'project').valid); }
+  listExperiments() { return this.list('experiment').filter((item) => validateEntityId(item.id, 'experiment').valid); }
+  listCompounds() { return this.list('compound').filter((item) => validateEntityId(item.id, 'compound').valid); }
+  listDataAssets() { return this.list('data-asset').filter((item) => validateEntityId(item.id, 'data-asset').valid); }
 
   getById(id, expectedKind = '') {
     const items = expectedKind ? this.list(expectedKind) : ['project', 'experiment', 'compound', 'data-asset'].flatMap((kind) => this.list(kind));
@@ -1099,7 +1118,6 @@ const NMR_ARCHIVE_FOLDER = '';
 const NUCLEUS_ARCHIVE_MAP = { '1H': '氢谱', '13C': '碳谱' };
 const { AUDIT_FOLDER, AUDIT_FILE } = require('./lib/database');
 const { upsertNmrLedger } = require('./lib/entities/nmr-ledger');
-const { generateRecordId } = require('./lib/data');
 
 const { spawn } = require('child_process');
 
@@ -1155,6 +1173,10 @@ function archiveBatchStatus(archivedCount, failedCount) {
   return archived > 0 ? 'partial_failure' : 'failed';
 }
 
+function platformError(platform = process.platform) {
+  return platform === 'win32' ? '' : '当前版本的外部文件系统功能仅支持 Windows。';
+}
+
 async function pathExists(candidate) {
   try {
     await fs.lstat(candidate);
@@ -1191,23 +1213,28 @@ async function summarizeFolder(root) {
   return summary;
 }
 
-async function scanDirectory(root, current, results) {
-  const entries = await fs.readdir(current, { withFileTypes: true });
+async function scanDirectory(root, current, results, errors) {
+  let entries;
+  try { entries = await fs.readdir(current, { withFileTypes: true }); }
+  catch (error) { errors.push({ path: current, error: error instanceof Error ? error.message : String(error) }); return; }
   for (const entry of entries) {
     const fullPath = path.win32.join(current, entry.name);
     if (!insideRoot(fullPath, root)) continue;
+    if (entry.isSymbolicLink()) { errors.push({ path: fullPath, error: '跳过符号链接目录' }); continue; }
     if (entry.isDirectory()) {
-      await scanDirectory(root, fullPath, results);
+      await scanDirectory(root, fullPath, results, errors);
       continue;
     }
     if (!entry.isFile() || entry.name.toLowerCase() !== 'acqus') continue;
 
     const scanFolder = path.win32.dirname(fullPath);
-    const [content, stat, summary] = await Promise.all([
-      fs.readFile(fullPath, 'utf8'),
-      fs.stat(scanFolder),
-      summarizeFolder(scanFolder)
-    ]);
+    let content, stat, summary;
+    try {
+      [content, stat, summary] = await Promise.all([fs.readFile(fullPath, 'utf8'), fs.stat(scanFolder), summarizeFolder(scanFolder)]);
+    } catch (error) {
+      errors.push({ path: scanFolder, error: error instanceof Error ? error.message : String(error) });
+      continue;
+    }
     const relativeScanPath = path.win32.relative(root, scanFolder);
     const parentPath = path.win32.dirname(relativeScanPath);
     let hasFid = false;
@@ -1232,7 +1259,10 @@ class NmrInboxStore {
     this.plugin = plugin;
     this.app = plugin?.app;
     this.registerNmrArchive = options.registerNmrArchive || upsertNmrLedger;
+    this.platform = options.platform || process.platform;
   }
+
+  getPlatformError() { return platformError(this.platform); }
 
   get inboxFolder() {
     return String(this.plugin?.settings?.nmrInboxFolder || '').trim();
@@ -1253,12 +1283,13 @@ class NmrInboxStore {
   }
 
   async openFolder(folder, app) {
+    if (this.getPlatformError()) throw new Error(this.getPlatformError());
     const target = resolveNmrPath(folder);
     const root = resolveNmrPath(this.inboxFolder);
     const archiveRoot = resolveNmrPath(this.archiveFolder);
     if (!insideRoot(target, root) && !insideRoot(target, archiveRoot)) throw new Error('拒绝打开工作区外的路径');
     await fs.access(target);
-    if (process.platform !== 'win32') throw new Error('当前仅支持 Windows 文件夹跳转');
+    if (this.platform !== 'win32') throw new Error(this.getPlatformError());
 
     // Start Explorer directly first. Obsidian's openWithDefaultApp may return
     // without opening folders, so it must remain a fallback rather than the
@@ -1281,18 +1312,21 @@ class NmrInboxStore {
   }
 
   async listPendingScans() {
+    if (this.getPlatformError()) throw new Error(this.getPlatformError());
     const configurationError = this.getConfigurationError();
     if (configurationError) throw new Error(configurationError);
     return this.listInboxScans();
   }
 
   async listInboxScans() {
+    if (this.getPlatformError()) throw new Error(this.getPlatformError());
     if (!this.inboxFolder) throw new Error('尚未配置 NMR 待处理目录，请前往 设置 → 科研工作台设置。');
     const root = resolveNmrPath(this.inboxFolder);
     const rootStat = await fs.stat(root);
     if (!rootStat.isDirectory()) throw new Error('待解核磁目录不可用');
     const results = [];
-    await scanDirectory(root, root, results);
+    this.scanErrors = [];
+    await scanDirectory(root, root, results, this.scanErrors);
     return results.sort((a, b) => String(b.modified).localeCompare(String(a.modified)) || a.relativeScanPath.localeCompare(b.relativeScanPath));
   }
 
@@ -1591,6 +1625,7 @@ module.exports = {
   archiveBatchStatus,
   resolveNmrPath,
   volumeRoot,
+  platformError,
   NmrInboxStore
 };
 
@@ -1598,6 +1633,17 @@ module.exports = {
 "./lib/nmr-archive-modal": function (module, exports, require) {
 const { Modal, Notice, Setting } = require('obsidian');
 const path = require('path');
+
+function reconcileRelations(relations, projectId, experiments = [], compounds = []) {
+  const next = { ...relations, projectId: projectId || '', project: '' };
+  const project = relations.projectItems?.find((item) => item.id === projectId);
+  next.project = project?.title || relations.project || '';
+  const experiment = experiments.find((item) => item.id === next.experimentId);
+  const compound = compounds.find((item) => item.id === next.compoundId);
+  if (next.experimentId && experiment?.projectId && experiment.projectId !== next.projectId) { next.experimentId = ''; next.experiment = ''; }
+  if (next.compoundId && compound?.projectId && compound.projectId !== next.projectId) { next.compoundId = ''; next.compound = ''; }
+  return next;
+}
 
 class NmrArchiveModal extends Modal {
   constructor(app, nmrInboxStore, relativePaths, options = {}) {
@@ -1649,7 +1695,12 @@ class NmrArchiveModal extends Modal {
           this.relations[idKey] = value;
           const item = items.find((candidate) => candidate.id === value);
           this.relations[key] = item?.title || '';
-          if (key === 'project') this.renderRelations();
+          if (key === 'project') {
+            const next = reconcileRelations({ ...this.relations, projectItems: projects }, value, experiments, compounds);
+            delete next.projectItems;
+            this.relations = next;
+            this.renderRelations();
+          }
           if (key === 'experiment' && item) {
             if (!this.relations.projectId && item.projectId) { this.relations.projectId = item.projectId; this.relations.project = projects.find((candidate) => candidate.id === item.projectId)?.title || ''; }
             if (!this.relations.compoundId && item.compoundId) { this.relations.compoundId = item.compoundId; this.relations.compound = compounds.find((candidate) => candidate.id === item.compoundId)?.title || ''; }
@@ -1761,7 +1812,7 @@ class NmrArchiveModal extends Modal {
   }
 }
 
-module.exports = { NmrArchiveModal };
+module.exports = { NmrArchiveModal, reconcileRelations };
 
 },
 "./lib/nmr-delete-modal": function (module, exports, require) {
@@ -1899,6 +1950,8 @@ module.exports = { NmrDeleteModal };
 const fs = require('fs/promises');
 const path = require('path');
 const { spawn } = require('child_process');
+const MAX_SCAN_FILES = 2000;
+const MAX_SCAN_DEPTH = 8;
 
 const WORK_QUEUE_SOURCES = [
   { id: 'spectra', setting: 'spectrumInboxFolder', label: '待测光谱', description: '待测光谱、质谱、荧光及其分析文件', excludedNames: [] },
@@ -1907,6 +1960,7 @@ const WORK_QUEUE_SOURCES = [
 ];
 
 function isWindowsAbsolute(value) { return /^[A-Za-z]:[\\/]/.test(String(value || '')) || String(value || '').startsWith('\\\\'); }
+function pathApi(value) { return isWindowsAbsolute(value) ? path.win32 : path; }
 function resolvePath(value) { const raw = String(value || ''); return isWindowsAbsolute(raw) ? path.win32.normalize(raw) : path.resolve(raw); }
 function insideRoot(candidate, root) {
   const api = isWindowsAbsolute(candidate) || isWindowsAbsolute(root) ? path.win32 : path;
@@ -1914,31 +1968,36 @@ function insideRoot(candidate, root) {
   return relative === '' || (!relative.startsWith(`..${api.sep}`) && relative !== '..' && !api.isAbsolute(relative));
 }
 
-async function summarizeDirectory(root, current, summary) {
+function platformError(platform = process.platform) { return platform === 'win32' ? '' : '当前版本的外部文件系统功能仅支持 Windows。'; }
+
+async function summarizeDirectory(root, current, summary, depth = 0) {
+  if (depth > MAX_SCAN_DEPTH || summary.fileCount >= MAX_SCAN_FILES) { summary.truncated = true; return; }
   const entries = await fs.readdir(current, { withFileTypes: true });
   for (const entry of entries) {
-    const fullPath = path.win32.join(current, entry.name);
+    if (summary.fileCount >= MAX_SCAN_FILES) { summary.truncated = true; break; }
+    const fullPath = pathApi(root).join(current, entry.name);
     if (!insideRoot(fullPath, root)) continue;
     if (entry.isDirectory()) {
       summary.directoryCount += 1;
       const stat = await fs.stat(fullPath);
       if (stat.mtimeMs > summary.modifiedMs) summary.modifiedMs = stat.mtimeMs;
-      await summarizeDirectory(root, fullPath, summary);
+      await summarizeDirectory(root, fullPath, summary, depth + 1);
     } else if (entry.isFile()) {
       const stat = await fs.stat(fullPath);
       summary.fileCount += 1;
       summary.totalBytes += stat.size;
       if (stat.mtimeMs > summary.modifiedMs) summary.modifiedMs = stat.mtimeMs;
+      if (summary.fileCount >= MAX_SCAN_FILES) summary.truncated = true;
     }
   }
 }
 
 async function summarizeEntry(root, entry) {
-  const fullPath = path.win32.resolve(root, entry.name);
+  const fullPath = pathApi(root).resolve(root, entry.name);
   if (!insideRoot(fullPath, root) || fullPath.toLowerCase() === root.toLowerCase()) throw new Error('队列路径不安全');
   const stat = await fs.lstat(fullPath);
   if (stat.isSymbolicLink()) throw new Error('不索引符号链接');
-  const summary = { fileCount: 0, directoryCount: 0, totalBytes: 0, modifiedMs: stat.mtimeMs };
+  const summary = { fileCount: 0, directoryCount: 0, totalBytes: 0, modifiedMs: stat.mtimeMs, truncated: false };
   if (stat.isDirectory()) {
     summary.directoryCount = 1;
     await summarizeDirectory(root, fullPath, summary);
@@ -1948,16 +2007,17 @@ async function summarizeEntry(root, entry) {
   } else {
     throw new Error('不支持的文件类型');
   }
-  return { name: entry.name, path: fullPath, kind: stat.isDirectory() ? 'directory' : 'file', extension: stat.isDirectory() ? '' : path.win32.extname(entry.name).toLowerCase(), ...summary, modified: new Date(summary.modifiedMs).toISOString() };
+  return { name: entry.name, path: fullPath, kind: stat.isDirectory() ? 'directory' : 'file', extension: stat.isDirectory() ? '' : pathApi(root).extname(entry.name).toLowerCase(), ...summary, modified: new Date(summary.modifiedMs).toISOString() };
 }
 
 class WorkQueueStore {
-  constructor(plugin) { this.plugin = plugin; }
+  constructor(plugin, options = {}) { this.plugin = plugin; this.platform = options.platform || process.platform; }
 
   source(id) { return WORK_QUEUE_SOURCES.find((item) => item.id === id) || null; }
   folderFor(id) { const source = this.source(id); return source ? String(this.plugin?.settings?.[source.setting] || '').trim() : ''; }
 
   async listSource(id) {
+    if (platformError(this.platform)) throw new Error(platformError(this.platform));
     const source = this.source(id);
     if (!source) throw new Error('未知待处理队列');
     const folder = this.folderFor(id);
@@ -1979,12 +2039,12 @@ class WorkQueueStore {
   }
 
   async openEntry(id, entryPath) {
+    if (platformError(this.platform)) throw new Error(platformError(this.platform));
     const source = this.source(id);
     const root = resolvePath(this.folderFor(id));
     const target = resolvePath(entryPath);
     if (!source || !root || !insideRoot(target, root) || target.toLowerCase() === root.toLowerCase()) throw new Error('拒绝打开队列目录外的路径');
     await fs.access(target);
-    if (process.platform !== 'win32') throw new Error('当前仅支持 Windows 文件跳转');
     await new Promise((resolve, reject) => {
       const child = spawn('explorer.exe', [target], { detached: true, stdio: 'ignore', windowsHide: false });
       child.once('error', reject);
@@ -1993,7 +2053,7 @@ class WorkQueueStore {
   }
 }
 
-module.exports = { WORK_QUEUE_SOURCES, resolvePath, insideRoot, summarizeEntry, WorkQueueStore };
+module.exports = { WORK_QUEUE_SOURCES, MAX_SCAN_FILES, MAX_SCAN_DEPTH, platformError, resolvePath, insideRoot, summarizeEntry, WorkQueueStore };
 
 },
 "./lib/modal": function (module, exports, require) {
@@ -2237,12 +2297,13 @@ class ExperimentModal extends Modal {
     if (!this.relationContainer || !store) return;
     this.relationContainer.empty();
     const projects = store.listProjects();
-    const compounds = filterCompoundsByProject(store.listCompounds(), this.state.projectId);
+    const allCompounds = store.listCompounds();
+    const compounds = filterCompoundsByProject(allCompounds, this.state.projectId);
     new Setting(this.relationContainer).setName('关联课题（可选）').addDropdown((dropdown) => {
       dropdown.addOption('', '不关联');
       projects.forEach((item) => dropdown.addOption(item.id, `${item.title} · ${item.id}`));
       dropdown.setValue(this.state.projectId);
-      dropdown.onChange((value) => { this.state.projectId = value; const item = projects.find((candidate) => candidate.id === value); this.state.project = item?.title || ''; this.renderRelationSelectors(); });
+      dropdown.onChange((value) => { this.state.projectId = value; const item = projects.find((candidate) => candidate.id === value); this.state.project = item?.title || ''; const selectedCompound = allCompounds.find((candidate) => candidate.id === this.state.compoundId); if (selectedCompound?.projectId && value && selectedCompound.projectId !== value) { this.state.compoundId = ''; this.state.compound = ''; } this.renderRelationSelectors(); });
     });
     new Setting(this.relationContainer).setName('关联化合物（可选）').addDropdown((dropdown) => {
       dropdown.addOption('', '不关联');
@@ -2513,6 +2574,18 @@ const { generateRecordId } = require('./lib/data');
 
 const ASSET_LABELS = { nmr: 'NMR', hplc: 'HPLC', ms: 'MS', uvvis: 'UV-Vis', fluorescence: '荧光', image: '图像', orca: 'ORCA', raw: '原始数据', other: '其他' };
 
+function validateDataAssetRelations(state, entityStore) {
+  const projects = entityStore.listProjects(); const experiments = entityStore.listExperiments(); const compounds = entityStore.listCompounds(); const errors = [];
+  const project = projects.find((item) => item.id === state.projectId); const experiment = experiments.find((item) => item.id === state.experimentId); const compound = compounds.find((item) => item.id === state.compoundId);
+  if (state.projectId && !project) errors.push('所选课题不存在或 ID 无效');
+  if (state.experimentId && !experiment) errors.push('所选实验不存在或 ID 无效');
+  if (state.compoundId && !compound) errors.push('所选化合物不存在或 ID 无效');
+  if (project && experiment?.projectId && experiment.projectId !== project.id) errors.push('所选实验属于其他课题');
+  if (project && compound?.projectId && compound.projectId !== project.id) errors.push('所选化合物属于其他课题');
+  if (experiment?.compoundId && compound?.id && experiment.compoundId !== compound.id) errors.push('所选实验与化合物关联不一致');
+  return errors;
+}
+
 class DataAssetModal extends Modal {
   constructor(app, entityStore, options = {}) { super(app); this.entityStore = entityStore; this.options = options; this.state = { title: '', assetType: 'nmr', dataPath: '', projectId: '', project: '', experimentId: '', experiment: '', compoundId: '', compound: '', acquiredAt: '', notes: '', saving: false }; }
   onOpen() {
@@ -2529,7 +2602,7 @@ class DataAssetModal extends Modal {
     const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
     footer.createEl('button', { text: '取消', attr: { type: 'button' } }).addEventListener('click', () => this.close());
     const save = footer.createEl('button', { text: '创建数据资产', cls: 'mod-cta', attr: { type: 'button' } });
-    save.addEventListener('click', async () => { if (this.state.saving || !this.state.title.trim() || !this.state.dataPath.trim()) return void new Notice('请填写标题和数据路径'); this.state.saving = true; save.disabled = true; try { const result = await createDataAsset(this.app, this.state, generateRecordId); if (this.options.onCreated) await this.options.onCreated(result.file, result.asset); this.close(); new Notice('数据资产已创建'); } catch (error) { this.state.saving = false; save.disabled = false; new Notice(error instanceof Error ? error.message : '数据资产创建失败'); } });
+    save.addEventListener('click', async () => { if (this.state.saving || !this.state.title.trim() || !this.state.dataPath.trim()) return void new Notice('请填写标题和数据路径'); const relationErrors = validateDataAssetRelations(this.state, this.entityStore); if (relationErrors.length) return void new Notice(relationErrors.join('；')); this.state.saving = true; save.disabled = true; try { const result = await createDataAsset(this.app, this.state, generateRecordId); if (this.options.onCreated) await this.options.onCreated(result.file, result.asset); this.close(); new Notice('数据资产已创建'); } catch (error) { this.state.saving = false; save.disabled = false; new Notice(error instanceof Error ? error.message : '数据资产创建失败'); } });
   }
   addRelationSelect(kind) {
     const config = { project: ['课题', this.entityStore.listProjects()], experiment: ['实验', this.entityStore.listExperiments()], compound: ['化合物', this.entityStore.listCompounds()] }[kind];
@@ -2538,7 +2611,7 @@ class DataAssetModal extends Modal {
   }
   onClose() { this.contentEl.empty(); }
 }
-module.exports = { DataAssetModal, ASSET_LABELS };
+module.exports = { DataAssetModal, ASSET_LABELS, validateDataAssetRelations };
 
 },
 "./lib/modals/migration-modal": function (module, exports, require) {
@@ -2612,7 +2685,7 @@ module.exports = { MigrationModal };
 },
 "./lib/modals/nmr-ledger-migration-modal": function (module, exports, require) {
 const { Modal, Notice } = require('obsidian');
-const { legacyNmrAssets, consolidateLegacyNmrAssets } = require('./lib/entities/nmr-ledger');
+const { preflightLegacyNmrAssets, consolidateLegacyNmrAssets } = require('./lib/entities/nmr-ledger');
 
 class NmrLedgerMigrationModal extends Modal {
   constructor(app, options = {}) {
@@ -2621,6 +2694,7 @@ class NmrLedgerMigrationModal extends Modal {
     this.items = [];
     this.confirmed = false;
     this.busy = false;
+    this.preflight = null;
   }
 
   onOpen() {
@@ -2628,8 +2702,7 @@ class NmrLedgerMigrationModal extends Modal {
     this.contentEl.createEl('h2', { text: '合并旧核磁数据资产' });
     this.contentEl.createDiv({ cls: 'phdcc-empty', text: '旧的“每套一份”NMR 数据资产会被写入 NMR 归档台账；确认成功后，原单条笔记将移入 Obsidian 回收站，可恢复。原始核磁数据文件不会移动或删除。' });
     this.body = this.contentEl.createDiv();
-    this.items = legacyNmrAssets(this.app);
-    this.renderPreview();
+    this.body.createDiv({ cls: 'phdcc-empty', text: '正在检查重复 ID、路径冲突和台账结构…' });
     const confirmation = this.contentEl.createDiv({ cls: 'phdcc-archive-checks' });
     this.checkbox = confirmation.createEl('input', { attr: { type: 'checkbox', 'aria-label': '确认合并旧核磁数据资产' } });
     confirmation.createSpan({ text: '我确认将这些旧单条笔记合并，并移入 Obsidian 回收站。' });
@@ -2640,19 +2713,30 @@ class NmrLedgerMigrationModal extends Modal {
     this.button = footer.createEl('button', { text: '无需合并', cls: 'mod-cta', type: 'button' });
     this.button.addEventListener('click', () => { void this.submit(); });
     this.updateButton();
+    void this.prepare();
+  }
+
+  async prepare() {
+    try { this.preflight = await preflightLegacyNmrAssets(this.app); this.items = this.preflight.items; }
+    catch (error) { this.preflight = { items: [], errors: [error instanceof Error ? error.message : String(error)], warnings: [] }; this.items = []; }
+    this.renderPreview();
+    this.updateButton();
   }
 
   renderPreview() {
     this.body.empty();
-    if (!this.items.length) return void this.body.createDiv({ cls: 'phdcc-empty', text: '没有发现旧的单条 NMR 数据资产。' });
+    if (this.preflight?.errors?.length) this.preflight.errors.forEach((error) => this.body.createDiv({ cls: 'phdcc-file-next', text: `阻塞：${error}` }));
+    if (this.preflight?.warnings?.length) this.preflight.warnings.forEach((warning) => this.body.createDiv({ cls: 'phdcc-file-next', text: `警告：${warning}` }));
+    if (!this.items.length) return void this.body.createDiv({ cls: 'phdcc-empty', text: this.preflight?.errors?.length || this.preflight?.warnings?.length ? '存在冲突或潜在信息损失，已阻止整批迁移。' : '没有发现旧的单条 NMR 数据资产。' });
     this.body.createDiv({ cls: 'phdcc-file-meta', text: `将合并 ${this.items.length} 条：` });
     this.items.forEach(({ file, frontmatter }) => this.body.createDiv({ cls: 'phdcc-file-next', text: `${frontmatter.title || file.basename} · ${file.path}` }));
   }
 
   updateButton() {
     if (!this.button) return;
-    this.button.disabled = this.busy || !this.items.length || !this.confirmed;
-    this.button.setText(this.busy ? '合并中…' : !this.items.length ? '无需合并' : !this.confirmed ? '请先确认' : `合并 ${this.items.length} 条记录`);
+    const blocked = this.preflight?.errors?.length || this.preflight?.warnings?.length;
+    this.button.disabled = this.busy || !this.items.length || blocked || !this.confirmed;
+    this.button.setText(this.busy ? '合并中…' : blocked ? '存在阻塞项' : !this.items.length ? '无需合并' : !this.confirmed ? '请先确认' : `合并 ${this.items.length} 条记录`);
   }
 
   async submit() {
@@ -2720,6 +2804,7 @@ const VIEW_TYPE = 'phd-command-center-view';
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 const PRIORITY_LABEL = { high: '高', medium: '中', low: '低' };
 const EXPERIMENT_STATUS_LABEL = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻' };
+const DATABASE_TYPE_LABELS = { task: '任务', experiment: '实验', project: '课题', compound: '化合物', 'data-asset': '数据资产', data: '数据', literature: '文献', writing: '写作', progress: '进展', note: '其他' };
 const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'experiments', 'compound', 'nmr-inbox', 'work-queue', 'data', 'literature', 'writing', 'daily-review', 'research-db', 'integrity']);
 
 const NAV_GROUPS = [
@@ -2805,6 +2890,7 @@ class WorkbenchView extends ItemView {
     this.tasks = [];
     this.nmrScans = [];
     this.nmrError = '';
+    this.nmrScanErrors = [];
     this.selectedNmrPaths = new Set();
     this.workQueue = [];
     this.workQueueErrors = {};
@@ -3029,10 +3115,12 @@ class WorkbenchView extends ItemView {
   async refreshNmrInbox(render = true) {
     try {
       this.nmrScans = await this.nmrInboxStore.listPendingScans();
+      this.nmrScanErrors = this.nmrInboxStore.scanErrors || [];
       this.selectedNmrPaths = new Set([...this.selectedNmrPaths].filter((path) => this.nmrScans.some((scan) => scan.relativeScanPath === path)));
       this.nmrError = '';
     } catch (error) {
       this.nmrScans = [];
+      this.nmrScanErrors = [];
       this.nmrError = error instanceof Error ? error.message : '无法读取待解核磁目录';
     }
     if (render && this.activeSection === 'nmr-inbox' && this.pageEl) this.renderPage();
@@ -3360,7 +3448,7 @@ class WorkbenchView extends ItemView {
         new Notice(error instanceof Error ? error.message : '科研数据库同步失败');
       }
     });
-    const typeLabels = { task: '任务', experiment: '实验', project: '课题', data: '数据', literature: '文献', writing: '写作', progress: '进展', note: '其他' };
+    const typeLabels = DATABASE_TYPE_LABELS;
     const counts = {};
     this.researchDatabase.records.forEach((record) => { counts[record.type] = (counts[record.type] || 0) + 1; });
     const filterBar = this.pageEl.createDiv({ cls: 'phdcc-db-filters' });
@@ -3515,7 +3603,7 @@ class WorkbenchView extends ItemView {
       const row = card.createDiv({ cls: 'phdcc-nmr-row' });
       const main = row.createDiv({ cls: 'phdcc-nmr-main' });
       main.createDiv({ cls: 'phdcc-file-title', text: `${entry.kind === 'directory' ? '📁' : '📄'} ${entry.name}` });
-      main.createDiv({ cls: 'phdcc-file-meta', text: `${entry.kind === 'directory' ? `${entry.fileCount} 个文件 · ${entry.directoryCount} 个目录` : entry.extension || '文件'} · ${formatBytes(entry.totalBytes)} · ${new Date(entry.modified).toLocaleString('zh-CN')}` });
+      main.createDiv({ cls: 'phdcc-file-meta', text: `${entry.kind === 'directory' ? `${entry.truncated ? '≥' : ''}${entry.fileCount} 个文件 · ${entry.directoryCount} 个目录` : entry.extension || '文件'} · ${formatBytes(entry.totalBytes)}${entry.truncated ? '（已达扫描上限）' : ''} · ${new Date(entry.modified).toLocaleString('zh-CN')}` });
       main.createDiv({ cls: 'phdcc-file-next', text: entry.path });
       const open = row.createEl('button', { cls: 'phdcc-nmr-open', text: entry.kind === 'directory' ? '打开原始目录' : '打开文件', attr: { type: 'button' } });
       open.addEventListener('click', () => { void this.openWorkQueueEntry(source, entry); });
@@ -3574,6 +3662,7 @@ class WorkbenchView extends ItemView {
       settingsHint.addEventListener('click', () => this.app.setting.open());
       return;
     }
+    if (this.nmrScanErrors.length) card.createDiv({ cls: 'phdcc-file-next', text: `${this.nmrScanErrors.length} 个目录读取失败，已保留其他正常核磁；请检查：${this.nmrScanErrors.slice(0, 3).map((item) => item.path).join('、')}` });
     if (!visibleScans.length) {
       card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配的待解核磁' : '暂无待解核磁' });
       return;
@@ -3669,7 +3758,7 @@ class WorkbenchView extends ItemView {
   }
 }
 
-module.exports = { VIEW_TYPE, WorkbenchView, formatRelativeDate, badgeTone, VALID_SECTIONS };
+module.exports = { VIEW_TYPE, WorkbenchView, formatRelativeDate, badgeTone, VALID_SECTIONS, DATABASE_TYPE_LABELS };
 
 },
 "./main": function (module, exports, require) {

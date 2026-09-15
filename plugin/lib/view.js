@@ -31,6 +31,7 @@ const VIEW_TYPE = 'phd-command-center-view';
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 const PRIORITY_LABEL = { high: '高', medium: '中', low: '低' };
 const EXPERIMENT_STATUS_LABEL = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻' };
+const DATABASE_TYPE_LABELS = { task: '任务', experiment: '实验', project: '课题', compound: '化合物', 'data-asset': '数据资产', data: '数据', literature: '文献', writing: '写作', progress: '进展', note: '其他' };
 const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'experiments', 'compound', 'nmr-inbox', 'work-queue', 'data', 'literature', 'writing', 'daily-review', 'research-db', 'integrity']);
 
 const NAV_GROUPS = [
@@ -116,6 +117,7 @@ class WorkbenchView extends ItemView {
     this.tasks = [];
     this.nmrScans = [];
     this.nmrError = '';
+    this.nmrScanErrors = [];
     this.selectedNmrPaths = new Set();
     this.workQueue = [];
     this.workQueueErrors = {};
@@ -340,10 +342,12 @@ class WorkbenchView extends ItemView {
   async refreshNmrInbox(render = true) {
     try {
       this.nmrScans = await this.nmrInboxStore.listPendingScans();
+      this.nmrScanErrors = this.nmrInboxStore.scanErrors || [];
       this.selectedNmrPaths = new Set([...this.selectedNmrPaths].filter((path) => this.nmrScans.some((scan) => scan.relativeScanPath === path)));
       this.nmrError = '';
     } catch (error) {
       this.nmrScans = [];
+      this.nmrScanErrors = [];
       this.nmrError = error instanceof Error ? error.message : '无法读取待解核磁目录';
     }
     if (render && this.activeSection === 'nmr-inbox' && this.pageEl) this.renderPage();
@@ -671,7 +675,7 @@ class WorkbenchView extends ItemView {
         new Notice(error instanceof Error ? error.message : '科研数据库同步失败');
       }
     });
-    const typeLabels = { task: '任务', experiment: '实验', project: '课题', data: '数据', literature: '文献', writing: '写作', progress: '进展', note: '其他' };
+    const typeLabels = DATABASE_TYPE_LABELS;
     const counts = {};
     this.researchDatabase.records.forEach((record) => { counts[record.type] = (counts[record.type] || 0) + 1; });
     const filterBar = this.pageEl.createDiv({ cls: 'phdcc-db-filters' });
@@ -826,7 +830,7 @@ class WorkbenchView extends ItemView {
       const row = card.createDiv({ cls: 'phdcc-nmr-row' });
       const main = row.createDiv({ cls: 'phdcc-nmr-main' });
       main.createDiv({ cls: 'phdcc-file-title', text: `${entry.kind === 'directory' ? '📁' : '📄'} ${entry.name}` });
-      main.createDiv({ cls: 'phdcc-file-meta', text: `${entry.kind === 'directory' ? `${entry.fileCount} 个文件 · ${entry.directoryCount} 个目录` : entry.extension || '文件'} · ${formatBytes(entry.totalBytes)} · ${new Date(entry.modified).toLocaleString('zh-CN')}` });
+      main.createDiv({ cls: 'phdcc-file-meta', text: `${entry.kind === 'directory' ? `${entry.truncated ? '≥' : ''}${entry.fileCount} 个文件 · ${entry.directoryCount} 个目录` : entry.extension || '文件'} · ${formatBytes(entry.totalBytes)}${entry.truncated ? '（已达扫描上限）' : ''} · ${new Date(entry.modified).toLocaleString('zh-CN')}` });
       main.createDiv({ cls: 'phdcc-file-next', text: entry.path });
       const open = row.createEl('button', { cls: 'phdcc-nmr-open', text: entry.kind === 'directory' ? '打开原始目录' : '打开文件', attr: { type: 'button' } });
       open.addEventListener('click', () => { void this.openWorkQueueEntry(source, entry); });
@@ -885,6 +889,7 @@ class WorkbenchView extends ItemView {
       settingsHint.addEventListener('click', () => this.app.setting.open());
       return;
     }
+    if (this.nmrScanErrors.length) card.createDiv({ cls: 'phdcc-file-next', text: `${this.nmrScanErrors.length} 个目录读取失败，已保留其他正常核磁；请检查：${this.nmrScanErrors.slice(0, 3).map((item) => item.path).join('、')}` });
     if (!visibleScans.length) {
       card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配的待解核磁' : '暂无待解核磁' });
       return;
@@ -980,4 +985,4 @@ class WorkbenchView extends ItemView {
   }
 }
 
-module.exports = { VIEW_TYPE, WorkbenchView, formatRelativeDate, badgeTone, VALID_SECTIONS };
+module.exports = { VIEW_TYPE, WorkbenchView, formatRelativeDate, badgeTone, VALID_SECTIONS, DATABASE_TYPE_LABELS };

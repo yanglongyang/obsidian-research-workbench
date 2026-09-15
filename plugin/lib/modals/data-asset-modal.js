@@ -4,6 +4,18 @@ const { generateRecordId } = require('../data');
 
 const ASSET_LABELS = { nmr: 'NMR', hplc: 'HPLC', ms: 'MS', uvvis: 'UV-Vis', fluorescence: '荧光', image: '图像', orca: 'ORCA', raw: '原始数据', other: '其他' };
 
+function validateDataAssetRelations(state, entityStore) {
+  const projects = entityStore.listProjects(); const experiments = entityStore.listExperiments(); const compounds = entityStore.listCompounds(); const errors = [];
+  const project = projects.find((item) => item.id === state.projectId); const experiment = experiments.find((item) => item.id === state.experimentId); const compound = compounds.find((item) => item.id === state.compoundId);
+  if (state.projectId && !project) errors.push('所选课题不存在或 ID 无效');
+  if (state.experimentId && !experiment) errors.push('所选实验不存在或 ID 无效');
+  if (state.compoundId && !compound) errors.push('所选化合物不存在或 ID 无效');
+  if (project && experiment?.projectId && experiment.projectId !== project.id) errors.push('所选实验属于其他课题');
+  if (project && compound?.projectId && compound.projectId !== project.id) errors.push('所选化合物属于其他课题');
+  if (experiment?.compoundId && compound?.id && experiment.compoundId !== compound.id) errors.push('所选实验与化合物关联不一致');
+  return errors;
+}
+
 class DataAssetModal extends Modal {
   constructor(app, entityStore, options = {}) { super(app); this.entityStore = entityStore; this.options = options; this.state = { title: '', assetType: 'nmr', dataPath: '', projectId: '', project: '', experimentId: '', experiment: '', compoundId: '', compound: '', acquiredAt: '', notes: '', saving: false }; }
   onOpen() {
@@ -20,7 +32,7 @@ class DataAssetModal extends Modal {
     const footer = this.contentEl.createDiv({ cls: 'modal-button-container' });
     footer.createEl('button', { text: '取消', attr: { type: 'button' } }).addEventListener('click', () => this.close());
     const save = footer.createEl('button', { text: '创建数据资产', cls: 'mod-cta', attr: { type: 'button' } });
-    save.addEventListener('click', async () => { if (this.state.saving || !this.state.title.trim() || !this.state.dataPath.trim()) return void new Notice('请填写标题和数据路径'); this.state.saving = true; save.disabled = true; try { const result = await createDataAsset(this.app, this.state, generateRecordId); if (this.options.onCreated) await this.options.onCreated(result.file, result.asset); this.close(); new Notice('数据资产已创建'); } catch (error) { this.state.saving = false; save.disabled = false; new Notice(error instanceof Error ? error.message : '数据资产创建失败'); } });
+    save.addEventListener('click', async () => { if (this.state.saving || !this.state.title.trim() || !this.state.dataPath.trim()) return void new Notice('请填写标题和数据路径'); const relationErrors = validateDataAssetRelations(this.state, this.entityStore); if (relationErrors.length) return void new Notice(relationErrors.join('；')); this.state.saving = true; save.disabled = true; try { const result = await createDataAsset(this.app, this.state, generateRecordId); if (this.options.onCreated) await this.options.onCreated(result.file, result.asset); this.close(); new Notice('数据资产已创建'); } catch (error) { this.state.saving = false; save.disabled = false; new Notice(error instanceof Error ? error.message : '数据资产创建失败'); } });
   }
   addRelationSelect(kind) {
     const config = { project: ['课题', this.entityStore.listProjects()], experiment: ['实验', this.entityStore.listExperiments()], compound: ['化合物', this.entityStore.listCompounds()] }[kind];
@@ -29,4 +41,4 @@ class DataAssetModal extends Modal {
   }
   onClose() { this.contentEl.empty(); }
 }
-module.exports = { DataAssetModal, ASSET_LABELS };
+module.exports = { DataAssetModal, ASSET_LABELS, validateDataAssetRelations };
