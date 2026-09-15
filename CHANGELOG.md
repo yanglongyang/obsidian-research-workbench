@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0 — UI Refresh
+
+- 系统性刷新设计 tokens、排版密度、按钮/徽章/行和页面层级，统一 Light/Dark 与窄窗格表现。
+- Project Hub、实验、未归属实验、化合物、数据资产、数据库、关系检查、NMR、待处理队列和任务页面统一为高信息密度科研桌面风格。
+- 本版本不改变数据 schema、科研关系、迁移、NMR、队列或数据库行为。
+
 ## 0.5.1 — Project Relations Closure
 
 - 新增 Project Hub：按永久 `project_id` 聚合实验、化合物、数据资产、任务与只读时间线。

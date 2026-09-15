@@ -102,6 +102,16 @@ function createBadge(container, text, tone = 'neutral') {
   return container.createSpan({ cls: `phdcc-badge is-${tone}`, text });
 }
 
+function makeInteractive(element, handler) {
+  element.setAttr('role', 'button');
+  element.setAttr('tabindex', '0');
+  element.addEventListener('click', handler);
+  element.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handler(event); }
+  });
+  return element;
+}
+
 class WorkbenchView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -529,7 +539,7 @@ class WorkbenchView extends ItemView {
     });
     const main = row.createDiv({ cls: 'phdcc-task-main' });
     const title = main.createDiv({ cls: 'phdcc-task-title', text: task.title });
-    title.addEventListener('click', () => { void this.openFile(task.file); });
+    makeInteractive(title, () => { void this.openFile(task.file); });
     const parts = [task.category, formatMinutes(task.estimate), formatRelativeDate(task.due)].filter(Boolean);
     main.createDiv({ cls: 'phdcc-task-meta', text: parts.join(' · ') });
     const badge = createBadge(row, PRIORITY_LABEL[task.priority] || '中', badgeTone(task.priority, 'priority'));
@@ -612,7 +622,7 @@ class WorkbenchView extends ItemView {
       const info = item.file ? { ...this.fileInfo(item.file), title: item.title, status: item.status, nextAction: item.nextAction, projectId: item.id } : this.fileInfo(file);
       const card = grid.createDiv({ cls: 'phdcc-project-card' });
       const heading = card.createDiv({ cls: 'phdcc-project-title', text: info.title });
-      heading.addEventListener('click', () => { if (item.id) { this.selectedProjectId = item.id; this.renderPage(); } else void this.openFile(file); });
+      makeInteractive(heading, () => { if (item.id) { this.selectedProjectId = item.id; this.renderPage(); } else void this.openFile(file); });
       const metadata = [info.status && `状态：${info.status}`, info.priority && `优先级：${info.priority}`, info.stage && `阶段：${info.stage}`].filter(Boolean);
       card.createDiv({ cls: 'phdcc-project-meta', text: metadata.join(' · ') || info.path });
       if (info.nextAction) card.createDiv({ cls: 'phdcc-project-next', text: `下一步：${info.nextAction}` });
@@ -627,7 +637,7 @@ class WorkbenchView extends ItemView {
     items.forEach((item) => {
       const row = card.createDiv({ cls: 'phdcc-file-row' });
       const title = row.createDiv({ cls: 'phdcc-file-title', text: `${item.compoundCode || item.title} · ${item.title}` });
-      title.addEventListener('click', () => { void this.openFile(item.file); });
+      makeInteractive(title, () => { void this.openFile(item.file); });
       row.createDiv({ cls: 'phdcc-file-meta', text: `${item.project || '未关联课题'} · ${item.id}` });
       const counts = this.researchDatabase.records.filter((record) => record.compoundId === item.id);
       row.createDiv({ cls: 'phdcc-file-next', text: `关联记录：${counts.length}` });
@@ -668,7 +678,7 @@ class WorkbenchView extends ItemView {
     const row = container.createDiv({ cls: `phdcc-experiment-row${info.status === 'blocked' ? ' is-blocked' : ''}` });
     const main = row.createDiv({ cls: 'phdcc-experiment-main' });
     const heading = main.createDiv({ cls: 'phdcc-file-title', text: info.title });
-    heading.addEventListener('click', () => { void this.openFile(file); });
+    makeInteractive(heading, () => { void this.openFile(file); });
     const context = [info.project || info.projectId, info.experimentDate && formatRelativeDate(info.experimentDate), info.sample].filter(Boolean);
     main.createDiv({ cls: 'phdcc-file-meta', text: context.join(' · ') || '未补充课题或样本信息' });
     if (info.nextAction) main.createDiv({ cls: 'phdcc-file-next', text: `→ 下一步：${info.nextAction}` });
@@ -764,7 +774,7 @@ class WorkbenchView extends ItemView {
     visible.forEach((record) => {
       const row = card.createDiv({ cls: 'phdcc-db-row' });
       const title = row.createDiv({ cls: 'phdcc-file-title', text: record.title });
-      title.addEventListener('click', () => {
+      makeInteractive(title, () => {
         const file = this.app.vault.getAbstractFileByPath(record.path);
         if (file) void this.openFile(file);
         else new Notice(`文件不存在：${record.path}`);
@@ -807,7 +817,7 @@ class WorkbenchView extends ItemView {
     consolidate.addEventListener('click', () => this.openNmrLedgerMigrationModal());
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card' });
     const assets = this.entityStore.listDataAssets().filter((item) => !this.searchQuery || `${item.title} ${item.assetType} ${item.dataPath} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
-    if (assets.length) assets.forEach((item) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: item.title }); title.addEventListener('click', () => { void this.openFile(item.file); }); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.assetType || 'other'} · ${item.project || '未关联课题'} · ${item.id}` }); row.createDiv({ cls: 'phdcc-file-next', text: item.dataPath || '未记录数据路径' }); });
+    if (assets.length) assets.forEach((item) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: item.title }); makeInteractive(title, () => { void this.openFile(item.file); }); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.assetType || 'other'} · ${item.project || '未关联课题'} · ${item.id}` }); row.createDiv({ cls: 'phdcc-file-next', text: item.dataPath || '未记录数据路径' }); });
     const legacy = this.filteredFiles(this.readOnlyItems(DATA_FOLDER, 30, true));
     if (legacy.length) { card.createEl('h3', { text: '旧数据记录（只读）' }); this.renderReadOnlyList(card, legacy, ''); }
     if (!assets.length && !legacy.length) card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配数据资产' : '暂无数据资产' });
@@ -997,7 +1007,7 @@ class WorkbenchView extends ItemView {
       const info = this.fileInfo(file);
       const row = container.createDiv({ cls: 'phdcc-file-row' });
       const heading = row.createDiv({ cls: 'phdcc-file-title', text: info.title });
-      heading.addEventListener('click', () => { void this.openFile(file); });
+      makeInteractive(heading, () => { void this.openFile(file); });
       row.createDiv({ cls: 'phdcc-file-meta', text: `${info.path} · ${info.date}` });
       if (info.status) row.createSpan({ cls: 'phdcc-file-status', text: info.status });
       if (info.nextAction) row.createDiv({ cls: 'phdcc-file-next', text: `下一步：${info.nextAction}` });
