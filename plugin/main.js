@@ -3497,10 +3497,11 @@ class WorkbenchView extends ItemView {
 
   renderTopbar(main) {
     const topbar = main.createDiv({ cls: 'phdcc-topbar' });
-    const contextGroup = topbar.createDiv({ cls: 'phdcc-topbar-context-group' });
+    const inner = topbar.createDiv({ cls: 'phdcc-topbar-inner' });
+    const contextGroup = inner.createDiv({ cls: 'phdcc-topbar-context-group' });
     this.topbarContext = contextGroup.createDiv({ cls: 'phdcc-topbar-context', text: '科研工作台' });
     contextGroup.createDiv({ cls: 'phdcc-date', text: new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date()) });
-    const searchWrap = topbar.createDiv({ cls: 'phdcc-search' });
+    const searchWrap = inner.createDiv({ cls: 'phdcc-search' });
     const searchIcon = searchWrap.createSpan({ cls: 'phdcc-search-icon' });
     setIcon(searchIcon, 'search');
     this.searchInput = searchWrap.createEl('input', { attr: { type: 'search', placeholder: '搜索当前页面…', 'aria-label': '搜索当前页面' } });
@@ -3510,7 +3511,7 @@ class WorkbenchView extends ItemView {
       this.renderPage();
     });
     searchWrap.createSpan({ cls: 'phdcc-key-hint', text: '⌘/Ctrl K' });
-    const quick = topbar.createEl('button', { cls: 'phdcc-add-btn', text: '+ 快速新增', attr: { type: 'button', 'aria-label': '快速新增' } });
+    const quick = inner.createEl('button', { cls: 'phdcc-add-btn', text: '+ 快速新增', attr: { type: 'button', 'aria-label': '快速新增' } });
     quick.addEventListener('click', () => this.openQuickCreate());
   }
 
@@ -4019,14 +4020,15 @@ class WorkbenchView extends ItemView {
       label: '+ 新增任务',
       onClick: () => this.openTaskModal()
     });
-    const refresh = this.pageEl.createEl('button', {
-      cls: 'phdcc-page-add phdcc-calendar-add',
+    const toolbar = this.pageEl.createDiv({ cls: 'phdcc-page-toolbar phdcc-db-toolbar' });
+    const refresh = toolbar.createEl('button', {
+      cls: 'phdcc-btn phdcc-btn-secondary',
       text: '↻ 同步数据库',
       attr: { type: 'button', title: '重新扫描并更新科研数据库' }
     });
-    const maintenance = this.pageEl.createEl('button', { cls: 'phdcc-page-add phdcc-calendar-add', text: '数据维护：永久 ID', attr: { type: 'button' } });
+    const maintenance = toolbar.createEl('button', { cls: 'phdcc-btn phdcc-btn-secondary', text: 'ID 维护', attr: { type: 'button', title: '数据维护：永久 ID' } });
     maintenance.addEventListener('click', () => this.openMigrationModal());
-    const integrity = this.pageEl.createEl('button', { cls: 'phdcc-page-add phdcc-calendar-add', text: `关系检查 (${this.researchDatabase.relationshipIssues?.length || 0})`, attr: { type: 'button' } });
+    const integrity = toolbar.createEl('button', { cls: 'phdcc-btn phdcc-btn-secondary', text: `关系检查 ${this.researchDatabase.relationshipIssues?.length || 0}`, attr: { type: 'button' } });
     integrity.addEventListener('click', () => { this.activeSection = 'integrity'; this.saveUiState(); this.renderPage(); });
     refresh.addEventListener('click', async () => {
       refresh.disabled = true;
@@ -4133,7 +4135,8 @@ class WorkbenchView extends ItemView {
 
   _renderDataPage() {
     this.renderPageHeader('数据资产', '原始数据位置与派生索引', { label: '+ 新增数据资产', onClick: () => this.openDataAssetModal() });
-    const consolidate = this.pageEl.createEl('button', { cls: 'phdcc-page-add phdcc-calendar-add', text: '合并旧核磁记录', attr: { type: 'button', title: '将旧单条 NMR 数据资产合并为一个台账' } });
+    const dataToolbar = this.pageEl.createDiv({ cls: 'phdcc-page-toolbar' });
+    const consolidate = dataToolbar.createEl('button', { cls: 'phdcc-btn phdcc-btn-secondary', text: '合并旧核磁记录', attr: { type: 'button', title: '将旧单条 NMR 数据资产合并为一个台账' } });
     consolidate.addEventListener('click', () => this.openNmrLedgerMigrationModal());
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-data-explorer' });
     const assets = this.entityStore.listDataAssets().filter((item) => !this.searchQuery || `${item.title} ${item.assetType} ${item.dataPath} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
@@ -4145,8 +4148,9 @@ class WorkbenchView extends ItemView {
 
   _renderWorkQueuePage() {
     this.renderPageHeader('待处理队列', '按顶级文件夹或根目录文件汇总；只读扫描，不会自动移动外部数据');
-    const refresh = this.pageEl.createEl('button', {
-      cls: 'phdcc-page-add phdcc-calendar-add phdcc-nmr-refresh',
+    const queueToolbar = this.pageEl.createDiv({ cls: 'phdcc-page-toolbar' });
+    const refresh = queueToolbar.createEl('button', {
+      cls: 'phdcc-btn phdcc-btn-secondary phdcc-nmr-refresh',
       text: '↻ 刷新待处理队列',
       attr: { type: 'button', title: '重新读取待测光谱、待处理数据和待完成文档目录' }
     });
@@ -4194,14 +4198,15 @@ class WorkbenchView extends ItemView {
     const entries = this.filteredWorkQueueEntries(queue.entries);
     if (!entries.length) return void card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配的待处理项目' : '该目录暂无待处理项目' });
     entries.forEach((entry) => {
-      const row = card.createDiv({ cls: 'phdcc-nmr-row' });
+      const row = card.createDiv({ cls: 'phdcc-nmr-row phdcc-work-queue-row' });
       const main = row.createDiv({ cls: 'phdcc-nmr-main' });
       main.createDiv({ cls: 'phdcc-file-title', text: `${entry.kind === 'directory' ? '📁' : '📄'} ${entry.name}` });
       main.createDiv({ cls: 'phdcc-file-meta', text: `${entry.kind === 'directory' ? `${entry.truncated ? '≥' : ''}${entry.fileCount} 个文件 · ${entry.directoryCount} 个目录` : entry.extension || '文件'} · ${formatBytes(entry.totalBytes)}${entry.truncated ? '（已达扫描上限）' : ''} · ${new Date(entry.modified).toLocaleString('zh-CN')}` });
       main.createDiv({ cls: 'phdcc-file-next', text: entry.path });
-      const open = row.createEl('button', { cls: 'phdcc-nmr-open', text: entry.kind === 'directory' ? '打开原始目录' : '打开文件', attr: { type: 'button' } });
+      const actions = row.createDiv({ cls: 'phdcc-work-queue-actions' });
+      const open = actions.createEl('button', { cls: 'phdcc-btn phdcc-btn-secondary', text: entry.kind === 'directory' ? '打开原始目录' : '打开文件', attr: { type: 'button' } });
       open.addEventListener('click', () => { void this.openWorkQueueEntry(source, entry); });
-      const task = row.createEl('button', { cls: 'phdcc-nmr-open', text: '新增处理任务', attr: { type: 'button' } });
+      const task = actions.createEl('button', { cls: 'phdcc-btn phdcc-btn-secondary', text: '新增处理任务', attr: { type: 'button' } });
       task.addEventListener('click', () => this.openWorkQueueTask(source, entry));
     });
   }
@@ -4212,15 +4217,16 @@ class WorkbenchView extends ItemView {
       disabled: this.selectedNmrPaths.size === 0,
       onClick: () => this.openNmrArchiveModal()
     });
-    const remove = this.pageEl.createEl('button', {
-      cls: 'phdcc-page-add phdcc-calendar-add phdcc-nmr-delete',
+    const nmrToolbar = this.pageEl.createDiv({ cls: 'phdcc-page-toolbar phdcc-nmr-toolbar' });
+    const remove = nmrToolbar.createEl('button', {
+      cls: 'phdcc-btn phdcc-nmr-delete',
       text: `删除已选（永久） (${this.selectedNmrPaths.size})`,
       attr: { type: 'button', title: '永久删除所选待解核磁原始数据' }
     });
     remove.disabled = this.selectedNmrPaths.size === 0;
     remove.addEventListener('click', () => this.openNmrDeleteModal());
-    const refresh = this.pageEl.createEl('button', {
-      cls: 'phdcc-page-add phdcc-calendar-add phdcc-nmr-refresh',
+    const refresh = nmrToolbar.createEl('button', {
+      cls: 'phdcc-btn phdcc-btn-secondary phdcc-nmr-refresh',
       text: '↻ 刷新核磁列表',
       attr: { type: 'button', title: '重新读取待解核磁目录' }
     });
