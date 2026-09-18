@@ -1127,10 +1127,11 @@ class WorkbenchView extends ItemView {
     files.forEach((file) => {
       const info = this.fileInfo(file);
       const row = container.createDiv({ cls: 'phdcc-file-row' });
-      const heading = row.createDiv({ cls: 'phdcc-file-title', text: info.title });
+      const head = row.createDiv({ cls: 'phdcc-file-row-head' });
+      const heading = head.createDiv({ cls: 'phdcc-file-title', text: info.title });
       makeInteractive(heading, () => { void this.openFile(file); });
+      if (info.status) createBadge(head, info.status, badgeTone(info.status));
       row.createDiv({ cls: 'phdcc-file-meta', text: `${info.path} · ${info.date}` });
-      if (info.status) createBadge(row, info.status, badgeTone(info.status));
       if (info.nextAction) row.createDiv({ cls: 'phdcc-file-next', text: `下一步：${info.nextAction}` });
     });
   }
