@@ -5,6 +5,35 @@ const STATUS_LABELS = { planning: '计划中', doing: '进行中', complete: '�
 function dateOf(item) { return String(item.experimentDate || item.date || item.updated || item.file?.stat?.mtime || '').slice(0, 10); }
 function sortRecent(items) { return [...items].sort((a, b) => String(dateOf(b)).localeCompare(String(dateOf(a))) || String(b.updated || '').localeCompare(String(a.updated || ''))); }
 function badge(container, text, tone = 'neutral') { return container.createSpan({ cls: `phdcc-badge is-${tone}`, text }); }
+function statusTone(value) {
+  const status = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+
+  if (status.includes('evidence-audited')) return 'purple';
+  if (status.includes('working-report')) return 'warning';
+
+  return {
+    doing: 'info',
+    'in-progress': 'info',
+    ongoing: 'info',
+    active: 'primary',
+    complete: 'success',
+    completed: 'success',
+    done: 'success',
+    blocked: 'danger',
+    stalled: 'danger',
+    failed: 'danger',
+    review: 'warning',
+    checking: 'warning',
+    deferred: 'warning',
+    planning: 'neutral',
+    planned: 'neutral',
+    archived: 'muted',
+    closed: 'muted'
+  }[status] || 'neutral';
+}
 function makeInteractive(element, handler) { element.setAttr('role', 'button'); element.setAttr('tabindex', '0'); element.addEventListener('click', handler); element.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handler(event); } }); return element; }
 
 function renderProjectHub(view, project) {
@@ -27,7 +56,7 @@ function renderProjectHub(view, project) {
   titleBlock.createDiv({ cls: 'phdcc-record-id phdcc-project-hero-id', text: project.id });
 
   const statusLine = titleBlock.createDiv({ cls: 'phdcc-project-hero-status' });
-  badge(statusLine, STATUS_LABELS[project.status] || project.status || '未设置', project.status === 'blocked' ? 'danger' : project.status === 'complete' ? 'success' : project.status === 'doing' ? 'info' : 'neutral');
+  badge(statusLine, STATUS_LABELS[project.status] || project.status || '未设置', statusTone(project.status));
   if (project.stage) statusLine.createSpan({ cls: 'phdcc-project-stage-chip', text: project.stage });
 
   if (project.nextAction) {
