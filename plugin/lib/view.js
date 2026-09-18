@@ -35,6 +35,7 @@ const VIEW_TYPE = 'phd-command-center-view';
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 const PRIORITY_LABEL = { high: '高', medium: '中', low: '低' };
 const EXPERIMENT_STATUS_LABEL = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻' };
+const PROJECT_STATUS_LABEL = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻', active: '进行中', archived: '已归档' };
 const DATABASE_TYPE_LABELS = { task: '任务', experiment: '实验', project: '课题', compound: '化合物', 'data-asset': '数据资产', data: '数据', literature: '文献', writing: '写作', progress: '进展', note: '其他' };
 const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'unassigned-experiments', 'experiments', 'compound', 'nmr-inbox', 'work-queue', 'data', 'literature', 'writing', 'daily-review', 'research-db', 'integrity']);
 
@@ -620,15 +621,50 @@ class WorkbenchView extends ItemView {
     const items = formal.length ? formal : this.filteredFiles(this.readOnlyItems(PROJECT_FOLDER, 30, true));
     const grid = this.pageEl.createDiv({ cls: 'phdcc-project-grid phdcc-project-list' });
     if (!items.length) return void grid.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配项目' : '暂无项目；可从原工作台的课题模板开始创建。' });
+
     items.forEach((item) => {
       const file = item.file || item;
-      const info = item.file ? { ...this.fileInfo(item.file), title: item.title, status: item.status, nextAction: item.nextAction, projectId: item.id } : this.fileInfo(file);
+      const info = item.file
+        ? { ...this.fileInfo(item.file), title: item.title, status: item.status, stage: item.stage, nextAction: item.nextAction, projectId: item.id }
+        : this.fileInfo(file);
+      const relation = item.id ? projectRelations(this.entityStore, this.researchDatabase, item.id) : null;
       const card = grid.createDiv({ cls: 'phdcc-project-card' });
-      const heading = card.createDiv({ cls: 'phdcc-project-title', text: info.title });
-      makeInteractive(heading, () => { if (item.id) { this.selectedProjectId = item.id; this.renderPage(); } else void this.openFile(file); });
-      const metadata = [info.status && `状态：${info.status}`, info.priority && `优先级：${info.priority}`, info.stage && `阶段：${info.stage}`].filter(Boolean);
-      card.createDiv({ cls: 'phdcc-project-meta', text: metadata.join(' · ') || info.path });
-      if (info.nextAction) card.createDiv({ cls: 'phdcc-project-next', text: `下一步：${info.nextAction}` });
+
+      const header = card.createDiv({ cls: 'phdcc-project-card-header' });
+      const heading = header.createDiv({ cls: 'phdcc-project-title', text: info.title });
+      makeInteractive(heading, () => {
+        if (item.id) {
+          this.selectedProjectId = item.id;
+          this.renderPage();
+        } else {
+          void this.openFile(file);
+        }
+      });
+      if (info.status) createBadge(header, PROJECT_STATUS_LABEL[info.status] || info.status, badgeTone(info.status));
+
+      const identity = card.createDiv({ cls: 'phdcc-project-identity' });
+      if (info.projectId) identity.createSpan({ cls: 'phdcc-record-id', text: info.projectId });
+      if (info.stage) identity.createSpan({ cls: 'phdcc-project-stage', text: info.stage });
+      if (!info.projectId && !info.stage) identity.createSpan({ cls: 'phdcc-project-path', text: info.path });
+
+      if (info.nextAction) {
+        const next = card.createDiv({ cls: 'phdcc-project-next' });
+        next.createSpan({ cls: 'phdcc-project-next-label', text: '下一步' });
+        next.createDiv({ cls: 'phdcc-project-next-text', text: info.nextAction });
+      }
+
+      if (relation) {
+        const metrics = card.createDiv({ cls: 'phdcc-project-metrics' });
+        [
+          ['实验', relation.experiments.length],
+          ['化合物', relation.compounds.length],
+          ['数据', relation.dataAssets.length]
+        ].forEach(([label, value]) => {
+          const metric = metrics.createDiv({ cls: 'phdcc-project-metric' });
+          metric.createSpan({ cls: 'phdcc-project-metric-value', text: String(value) });
+          metric.createSpan({ cls: 'phdcc-project-metric-label', text: label });
+        });
+      }
     });
   }
 
@@ -650,11 +686,11 @@ class WorkbenchView extends ItemView {
   }
 
   _renderExperimentPage() {
-    this.renderPageHeader('实验记录', '新建记录存入工作台；永久实验可快速修改课题归属', {
+    this.renderPageHeader('实验记录', '按课题、日期与样本快速扫读；优先显示实验的下一步', {
       label: '+ 新增实验记录',
       onClick: () => this.openExperimentModal()
     });
-    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-experiment-list phdcc-data-list' });
+    const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-experiment-list' });
     const files = this.filteredFiles(this.readOnlyItems(EXPERIMENT_FOLDERS, 50, false));
     if (!files.length) {
       const empty = card.createDiv({ cls: 'phdcc-empty' });
@@ -672,21 +708,52 @@ class WorkbenchView extends ItemView {
     const info = this.fileInfo(file);
     const row = container.createDiv({ cls: `phdcc-experiment-row${info.status === 'blocked' ? ' is-blocked' : ''}` });
     const main = row.createDiv({ cls: 'phdcc-experiment-main' });
-    const heading = main.createDiv({ cls: 'phdcc-file-title', text: info.title });
+
+    const heading = main.createDiv({ cls: 'phdcc-file-title phdcc-experiment-title', text: info.title });
     makeInteractive(heading, () => { void this.openFile(file); });
-    const context = [info.project || info.projectId, info.experimentDate && formatRelativeDate(info.experimentDate), info.sample].filter(Boolean);
-    main.createDiv({ cls: 'phdcc-file-meta', text: context.join(' · ') || '未补充课题或样本信息' });
-    if (info.nextAction) main.createDiv({ cls: 'phdcc-file-next', text: `→ 下一步：${info.nextAction}` });
-    if (info.keyResult && info.status === 'blocked') main.createDiv({ cls: 'phdcc-file-next', text: `问题 / 结果：${info.keyResult}` });
+
+    const context = main.createDiv({ cls: 'phdcc-experiment-context' });
+    const contextItems = [
+      info.project || info.projectId,
+      info.experimentDate && formatRelativeDate(info.experimentDate),
+      info.sample
+    ].filter(Boolean);
+    if (contextItems.length) {
+      contextItems.forEach((value) => context.createSpan({ text: String(value) }));
+    } else {
+      context.createSpan({ cls: 'is-muted', text: '未补充课题或样本信息' });
+    }
+
+    if (info.nextAction) {
+      const next = main.createDiv({ cls: 'phdcc-experiment-next' });
+      next.createSpan({ cls: 'phdcc-experiment-callout-label', text: '下一步' });
+      next.createSpan({ cls: 'phdcc-experiment-callout-text', text: info.nextAction });
+    }
+    if (info.keyResult && info.status === 'blocked') {
+      const result = main.createDiv({ cls: 'phdcc-experiment-result' });
+      result.createSpan({ cls: 'phdcc-experiment-callout-label', text: '问题 / 结果' });
+      result.createSpan({ cls: 'phdcc-experiment-callout-text', text: info.keyResult });
+    }
+
     const side = row.createDiv({ cls: 'phdcc-experiment-side' });
     createBadge(side, EXPERIMENT_STATUS_LABEL[info.status] || '未设置', badgeTone(info.status));
     if (info.recordId) side.createDiv({ cls: 'phdcc-record-id', text: info.recordId });
+
+    const menu = side.createEl('details', { cls: 'phdcc-row-menu phdcc-experiment-menu' });
+    menu.createEl('summary', { cls: 'phdcc-row-menu-trigger', text: '•••', attr: { 'aria-label': `${info.title} 更多操作`, title: '更多操作' } });
+    const panel = menu.createDiv({ cls: 'phdcc-row-menu-panel' });
     if (info.recordId && info.recordId.startsWith('EXP-')) {
-      const relation = side.createEl('button', { cls: 'phdcc-row-action', text: '修改归属', attr: { type: 'button' } });
-      relation.addEventListener('click', () => this.openProjectRelationModal({ file, id: info.recordId, title: info.title, projectId: info.projectId, project: info.project }));
+      const relation = panel.createEl('button', { cls: 'phdcc-row-action', text: '修改归属', attr: { type: 'button' } });
+      relation.addEventListener('click', () => {
+        menu.removeAttribute('open');
+        this.openProjectRelationModal({ file, id: info.recordId, title: info.title, projectId: info.projectId, project: info.project });
+      });
     }
-    const action = side.createEl('button', { cls: 'phdcc-row-action', text: '打开', attr: { type: 'button', title: info.path } });
-    action.addEventListener('click', () => { void this.openFile(file); });
+    const action = panel.createEl('button', { cls: 'phdcc-row-action', text: '打开实验笔记', attr: { type: 'button', title: info.path } });
+    action.addEventListener('click', () => {
+      menu.removeAttribute('open');
+      void this.openFile(file);
+    });
   }
 
   _renderResearchDatabasePage() {
