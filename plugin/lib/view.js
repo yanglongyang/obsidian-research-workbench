@@ -94,10 +94,63 @@ function formatRelativeDate(value, today = localDate()) {
   return date.slice(5);
 }
 
+function normalizeStatus(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\\s]+/g, '-');
+}
+
 function badgeTone(value, kind = 'status') {
   if (kind === 'priority') return { high: 'danger', medium: 'warning', low: 'neutral' }[value] || 'neutral';
   if (kind === 'nmr') return value === '1H' || value === '13C' ? 'info' : 'warning';
-  return { planning: 'neutral', doing: 'info', complete: 'success', blocked: 'danger', todo: 'neutral', done: 'success', deferred: 'warning' }[value] || 'neutral';
+
+  const status = normalizeStatus(value);
+
+  if (status.includes('evidence-audited')) return 'purple';
+  if (status.includes('working-report')) return 'warning';
+
+  return {
+    doing: 'info',
+    'in-progress': 'info',
+    ongoing: 'info',
+    reading: 'info',
+    '进行中': 'info',
+
+    active: 'primary',
+    '活跃': 'primary',
+
+    done: 'success',
+    complete: 'success',
+    completed: 'success',
+    finished: 'success',
+    read: 'success',
+    available: 'success',
+    '已完成': 'success',
+    '已阅读': 'success',
+
+    blocked: 'danger',
+    stalled: 'danger',
+    failed: 'danger',
+    '受阻': 'danger',
+
+    review: 'warning',
+    checking: 'warning',
+    deferred: 'warning',
+    '复核中': 'warning',
+
+    draft: 'secondary',
+
+    planning: 'neutral',
+    planned: 'neutral',
+    todo: 'neutral',
+    queued: 'neutral',
+    '计划中': 'neutral',
+
+    archived: 'muted',
+    closed: 'muted',
+    '已归档': 'muted'
+  }[status] || 'neutral';
 }
 
 function createBadge(container, text, tone = 'neutral') {
@@ -1077,7 +1130,7 @@ class WorkbenchView extends ItemView {
       const heading = row.createDiv({ cls: 'phdcc-file-title', text: info.title });
       makeInteractive(heading, () => { void this.openFile(file); });
       row.createDiv({ cls: 'phdcc-file-meta', text: `${info.path} · ${info.date}` });
-      if (info.status) row.createSpan({ cls: 'phdcc-file-status', text: info.status });
+      if (info.status) createBadge(row, info.status, badgeTone(info.status));
       if (info.nextAction) row.createDiv({ cls: 'phdcc-file-next', text: `下一步：${info.nextAction}` });
     });
   }
@@ -1100,4 +1153,4 @@ class WorkbenchView extends ItemView {
   }
 }
 
-module.exports = { VIEW_TYPE, WorkbenchView, formatRelativeDate, badgeTone, VALID_SECTIONS, DATABASE_TYPE_LABELS };
+module.exports = { VIEW_TYPE, WorkbenchView, formatRelativeDate, normalizeStatus, badgeTone, VALID_SECTIONS, DATABASE_TYPE_LABELS };

@@ -961,12 +961,73 @@
 .phdcc-view .phdcc-file-title:hover,
 .phdcc-view .phdcc-task-title:hover,
 .phdcc-view .phdcc-project-title:hover { color: var(--phdcc-info); }
-.phdcc-view .phdcc-badge { padding: 2px 6px; border: 0; border-radius: 4px; font-size: 10px; font-weight: 650; }
-.phdcc-view .phdcc-badge.is-neutral { background: var(--phdcc-surface-soft); }
-.phdcc-view .phdcc-badge.is-info { color: var(--phdcc-info); background: var(--phdcc-info-soft); }
-.phdcc-view .phdcc-badge.is-success { color: var(--phdcc-success); background: var(--phdcc-success-soft); }
-.phdcc-view .phdcc-badge.is-warning { color: var(--phdcc-warning); background: var(--phdcc-warning-soft); }
-.phdcc-view .phdcc-badge.is-danger { color: var(--phdcc-danger); background: var(--phdcc-danger-soft); }
+.phdcc-view .phdcc-badge {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 20px;
+  align-items: center;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.phdcc-view .phdcc-badge.is-neutral {
+  color: var(--phdcc-muted);
+  background: var(--phdcc-surface-soft);
+  border-color: var(--phdcc-border);
+}
+.phdcc-view .phdcc-badge.is-info {
+  color: var(--phdcc-info);
+  background: var(--phdcc-info-soft);
+  border-color: color-mix(in srgb, var(--phdcc-info) 18%, transparent);
+}
+.phdcc-view .phdcc-badge.is-success {
+  color: var(--phdcc-success);
+  background: var(--phdcc-success-soft);
+  border-color: color-mix(in srgb, var(--phdcc-success) 18%, transparent);
+}
+.phdcc-view .phdcc-badge.is-warning {
+  color: var(--phdcc-warning);
+  background: var(--phdcc-warning-soft);
+  border-color: color-mix(in srgb, var(--phdcc-warning) 20%, transparent);
+}
+.phdcc-view .phdcc-badge.is-danger {
+  color: var(--phdcc-danger);
+  background: var(--phdcc-danger-soft);
+  border-color: color-mix(in srgb, var(--phdcc-danger) 20%, transparent);
+}
+.phdcc-view .phdcc-badge.is-primary {
+  color: var(--phdcc-accent);
+  background: color-mix(in srgb, var(--phdcc-accent) 12%, var(--phdcc-surface));
+  border-color: color-mix(in srgb, var(--phdcc-accent) 20%, transparent);
+}
+.phdcc-view .phdcc-badge.is-purple {
+  color: #7656c9;
+  background: color-mix(in srgb, #7656c9 11%, var(--phdcc-surface));
+  border-color: color-mix(in srgb, #7656c9 20%, transparent);
+}
+.phdcc-view .phdcc-badge.is-secondary {
+  color: var(--phdcc-muted);
+  background: color-mix(in srgb, var(--phdcc-info) 6%, var(--phdcc-surface-soft));
+  border-color: color-mix(in srgb, var(--phdcc-info) 12%, transparent);
+}
+.phdcc-view .phdcc-badge.is-muted {
+  color: var(--phdcc-faint);
+  background: var(--phdcc-surface-soft);
+  border-color: var(--phdcc-border);
+  opacity: .82;
+}
+.phdcc-view .phdcc-file-row > .phdcc-badge {
+  position: absolute;
+  top: 10px;
+  right: 0;
+}
+.phdcc-view .phdcc-file-card .phdcc-file-row > .phdcc-file-title {
+  padding-right: 96px;
+}
 .phdcc-view .phdcc-empty { padding: 24px 16px; border-color: var(--phdcc-border); border-radius: var(--phdcc-radius-md); }
 .phdcc-view .phdcc-db-path { max-width: 100%; color: var(--phdcc-faint); overflow-wrap: anywhere; }
 .phdcc-view .phdcc-db-actions { gap: 5px; margin-top: 6px; }
