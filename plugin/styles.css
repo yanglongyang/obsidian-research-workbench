@@ -1020,13 +1020,29 @@
   border-color: var(--phdcc-border);
   opacity: .82;
 }
-.phdcc-view .phdcc-file-row > .phdcc-badge {
-  position: absolute;
-  top: 10px;
-  right: 0;
+.phdcc-view .phdcc-file-row-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
-.phdcc-view .phdcc-file-card .phdcc-file-row > .phdcc-file-title {
-  padding-right: 96px;
+.phdcc-view .phdcc-file-row-head .phdcc-file-title {
+  min-width: 0;
+  flex: 1;
+  padding-right: 0;
+}
+.phdcc-view .phdcc-file-row-head .phdcc-badge {
+  flex: 0 0 auto;
+  max-width: 48%;
+}
+@media (max-width: 700px) {
+  .phdcc-view .phdcc-file-row-head {
+    flex-wrap: wrap;
+  }
+
+  .phdcc-view .phdcc-file-row-head .phdcc-badge {
+    max-width: 100%;
+  }
 }
 .phdcc-view .phdcc-empty { padding: 24px 16px; border-color: var(--phdcc-border); border-radius: var(--phdcc-radius-md); }
 .phdcc-view .phdcc-db-path { max-width: 100%; color: var(--phdcc-faint); overflow-wrap: anywhere; }
