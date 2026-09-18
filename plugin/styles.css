@@ -1107,3 +1107,427 @@
   .phdcc-view .phdcc-compound-cell { padding: 5px 4px; }
   .phdcc-view .phdcc-compound-structure { margin: 8px 0; min-height: 108px; }
 }
+
+
+/* v0.6.3 UI refresh: project and experiment hierarchy. */
+.phdcc-view {
+  --phdcc-font-xs: 11px;
+  --phdcc-font-sm: 12px;
+  --phdcc-font-md: 14px;
+  --phdcc-font-lg: 16px;
+  --phdcc-font-xl: 20px;
+  --phdcc-font-2xl: 28px;
+  font-size: var(--phdcc-font-md);
+  line-height: 1.5;
+}
+
+.phdcc-view .phdcc-nav-text,
+.phdcc-view .phdcc-topbar-context,
+.phdcc-view .phdcc-search input,
+.phdcc-view .phdcc-btn,
+.phdcc-view .phdcc-page-add,
+.phdcc-view .phdcc-add-btn {
+  font-size: var(--phdcc-font-sm);
+}
+
+.phdcc-view .phdcc-page-title {
+  font-size: var(--phdcc-font-2xl);
+}
+
+.phdcc-view .phdcc-eyebrow,
+.phdcc-view .phdcc-key-hint,
+.phdcc-view .phdcc-nav-label {
+  font-size: var(--phdcc-font-xs);
+}
+
+.phdcc-view .phdcc-task-meta,
+.phdcc-view .phdcc-file-meta,
+.phdcc-view .phdcc-card-subtitle,
+.phdcc-view .phdcc-stat-label,
+.phdcc-view .phdcc-row-action,
+.phdcc-view .phdcc-project-meta {
+  font-size: var(--phdcc-font-sm);
+}
+
+.phdcc-view .phdcc-badge,
+.phdcc-view .phdcc-record-id {
+  font-size: var(--phdcc-font-xs);
+}
+
+.phdcc-view .phdcc-project-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.phdcc-view .phdcc-project-card {
+  display: flex;
+  min-height: 190px;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 18px;
+  background: var(--phdcc-surface);
+  border: 1px solid var(--phdcc-border);
+  border-radius: var(--phdcc-radius-lg);
+}
+
+.phdcc-view .phdcc-project-card:hover {
+  border-color: var(--phdcc-border-strong);
+  background: color-mix(in srgb, var(--phdcc-surface) 94%, var(--phdcc-accent) 6%);
+}
+
+.phdcc-view .phdcc-project-list .phdcc-project-card:first-child {
+  border-top: 1px solid var(--phdcc-border);
+}
+
+.phdcc-view .phdcc-project-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.phdcc-view .phdcc-project-card-header .phdcc-project-title {
+  flex: 1;
+  font-size: var(--phdcc-font-lg);
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.phdcc-view .phdcc-project-identity {
+  display: flex;
+  min-height: 24px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--phdcc-muted);
+}
+
+.phdcc-view .phdcc-project-stage,
+.phdcc-view .phdcc-project-path {
+  font-size: var(--phdcc-font-sm);
+}
+
+.phdcc-view .phdcc-project-stage::before {
+  margin-right: 7px;
+  color: var(--phdcc-faint);
+  content: "·";
+}
+
+.phdcc-view .phdcc-project-next {
+  margin-top: 0;
+  padding: 10px 12px;
+  background: var(--phdcc-surface-soft);
+  border-radius: var(--phdcc-radius-md);
+}
+
+.phdcc-view .phdcc-project-next-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--phdcc-faint);
+  font-size: var(--phdcc-font-xs);
+  font-weight: 700;
+  letter-spacing: .05em;
+}
+
+.phdcc-view .phdcc-project-next-text {
+  color: var(--phdcc-text);
+  font-size: var(--phdcc-font-sm);
+  line-height: 1.45;
+}
+
+.phdcc-view .phdcc-project-metrics {
+  display: flex;
+  gap: 18px;
+  margin-top: auto;
+  padding-top: 2px;
+}
+
+.phdcc-view .phdcc-project-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.phdcc-view .phdcc-project-metric-value {
+  color: var(--phdcc-text);
+  font-size: var(--phdcc-font-sm);
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.phdcc-view .phdcc-project-metric-label {
+  color: var(--phdcc-muted);
+  font-size: var(--phdcc-font-xs);
+}
+
+.phdcc-view .phdcc-project-hero {
+  margin-bottom: 20px;
+  padding: 18px 20px 0;
+  background: var(--phdcc-surface);
+  border: 1px solid var(--phdcc-border);
+  border-radius: var(--phdcc-radius-lg);
+}
+
+.phdcc-view .phdcc-project-hero-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.phdcc-view .phdcc-project-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.phdcc-view .phdcc-project-hero-body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.phdcc-view .phdcc-project-hero-title {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.phdcc-view .phdcc-project-hero-id {
+  margin-top: 5px;
+}
+
+.phdcc-view .phdcc-project-hero-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.phdcc-view .phdcc-project-stage-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  color: var(--phdcc-muted);
+  background: var(--phdcc-surface-soft);
+  border-radius: 4px;
+  font-size: var(--phdcc-font-xs);
+  font-weight: 650;
+}
+
+.phdcc-view .phdcc-project-hero-next {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: var(--phdcc-surface-soft);
+  border-left: 3px solid var(--phdcc-accent);
+  border-radius: var(--phdcc-radius-md);
+}
+
+.phdcc-view .phdcc-project-hero-next-label {
+  margin-bottom: 4px;
+  color: var(--phdcc-faint);
+  font-size: var(--phdcc-font-xs);
+  font-weight: 750;
+  letter-spacing: .06em;
+}
+
+.phdcc-view .phdcc-project-hero-next-text {
+  font-size: var(--phdcc-font-md);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.phdcc-view .phdcc-project-hero-stats {
+  margin: 16px -20px 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+}
+
+.phdcc-view .phdcc-project-overview-grid {
+  grid-template-columns: minmax(0, 1.8fr) minmax(250px, .9fr);
+  gap: 16px;
+}
+
+.phdcc-view .phdcc-project-progress-card,
+.phdcc-view .phdcc-project-organize-card {
+  height: 100%;
+}
+
+.phdcc-view .phdcc-project-progress-card h3,
+.phdcc-view .phdcc-project-organize-card h3,
+.phdcc-view .phdcc-hub-section > h3 {
+  margin: 0 0 12px;
+  font-size: var(--phdcc-font-lg);
+}
+
+.phdcc-view .phdcc-experiment-list {
+  padding: 4px 18px;
+  border-left: 0;
+  border-radius: var(--phdcc-radius-lg);
+}
+
+.phdcc-view .phdcc-experiment-row {
+  min-height: 82px;
+  gap: 18px;
+  padding: 14px 0;
+}
+
+.phdcc-view .phdcc-experiment-main {
+  min-width: 0;
+}
+
+.phdcc-view .phdcc-experiment-title {
+  font-size: var(--phdcc-font-md);
+  font-weight: 720;
+  line-height: 1.4;
+}
+
+.phdcc-view .phdcc-experiment-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 5px;
+  color: var(--phdcc-muted);
+  font-size: var(--phdcc-font-sm);
+}
+
+.phdcc-view .phdcc-experiment-context span + span::before {
+  margin: 0 7px;
+  color: var(--phdcc-faint);
+  content: "·";
+}
+
+.phdcc-view .phdcc-experiment-context .is-muted {
+  color: var(--phdcc-faint);
+}
+
+.phdcc-view .phdcc-experiment-next,
+.phdcc-view .phdcc-experiment-result {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 9px;
+  padding: 8px 10px;
+  border-radius: var(--phdcc-radius-md);
+}
+
+.phdcc-view .phdcc-experiment-next {
+  background: var(--phdcc-info-soft);
+}
+
+.phdcc-view .phdcc-experiment-result {
+  background: var(--phdcc-danger-soft);
+}
+
+.phdcc-view .phdcc-experiment-callout-label {
+  color: var(--phdcc-faint);
+  font-size: var(--phdcc-font-xs);
+  font-weight: 700;
+}
+
+.phdcc-view .phdcc-experiment-callout-text {
+  color: var(--phdcc-text);
+  font-size: var(--phdcc-font-sm);
+  line-height: 1.45;
+}
+
+.phdcc-view .phdcc-experiment-side {
+  min-width: 84px;
+  align-self: flex-start;
+  padding-top: 1px;
+}
+
+.phdcc-view .phdcc-experiment-menu {
+  position: relative;
+}
+
+.phdcc-view .phdcc-experiment-menu summary {
+  min-width: 30px;
+  text-align: center;
+}
+
+.phdcc-view .phdcc-row-menu-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 5px);
+  right: 0;
+  min-width: 140px;
+  padding: 5px;
+  background: var(--phdcc-surface);
+  border: 1px solid var(--phdcc-border);
+  border-radius: var(--phdcc-radius-md);
+  box-shadow: var(--phdcc-shadow);
+}
+
+.phdcc-view .phdcc-row-menu-panel .phdcc-row-action {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 6px 8px;
+  border: 0;
+  text-align: left;
+}
+
+.phdcc-view .phdcc-row-menu-panel .phdcc-row-action:hover {
+  background: var(--phdcc-surface-hover);
+}
+
+@media (max-width: 980px) {
+  .phdcc-view .phdcc-project-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 650px) {
+  .phdcc-view {
+    font-size: 13px;
+  }
+
+  .phdcc-view .phdcc-project-card {
+    min-height: 0;
+    padding: 15px;
+  }
+
+  .phdcc-view .phdcc-project-hero {
+    padding: 14px 14px 0;
+  }
+
+  .phdcc-view .phdcc-project-hero-top,
+  .phdcc-view .phdcc-project-hero-body {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .phdcc-view .phdcc-project-hero-actions {
+    width: 100%;
+  }
+
+  .phdcc-view .phdcc-project-hero-title {
+    font-size: 24px;
+  }
+
+  .phdcc-view .phdcc-project-hero-stats {
+    margin-right: -14px;
+    margin-left: -14px;
+  }
+
+  .phdcc-view .phdcc-experiment-row {
+    min-height: 0;
+  }
+
+  .phdcc-view .phdcc-experiment-side {
+    min-width: 0;
+  }
+
+  .phdcc-view .phdcc-experiment-next,
+  .phdcc-view .phdcc-experiment-result {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+}
