@@ -2,7 +2,7 @@ const DB_FOLDER = '00-博士工作台/应用数据/数据库';
 const DB_FILE = `${DB_FOLDER}/records.json`;
 const AUDIT_FOLDER = '00-博士工作台/应用数据/审计';
 const AUDIT_FILE = `${AUDIT_FOLDER}/nmr-archive.jsonl`;
-const DATABASE_SCHEMA_VERSION = 3;
+const DATABASE_SCHEMA_VERSION = 4;
 const { validateEntityRecord } = require('./entities/identity');
 const MANAGED_FOLDERS = ['00-博士工作台', '实验记录', '文献', '文献阅读', 'DMAC_AIE_PET_调研'];
 
@@ -204,6 +204,40 @@ class ResearchDatabase {
         size: file.stat.size
       });
     }
+
+    for (const file of this.app.vault.getFiles()) {
+      if (file.extension !== 'canvas' || !isManagedPath(file.path) || isDerivedPath(file.path)) continue;
+      const path = normalizePath(file.path);
+      records.push({
+        id: `LEGACY-CANVAS-${simpleHash(path)}`,
+        identitySource: 'legacy-path',
+        type: 'canvas',
+        title: file.basename,
+        path,
+        folder: path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '',
+        kind: 'canvas',
+        status: '',
+        priority: '',
+        category: '',
+        date: '',
+        project: '',
+        projectId: '',
+        compoundId: '',
+        experimentId: '',
+        dataAssetId: '',
+        parentId: '',
+        relatedIds: [],
+        sample: '',
+        dataPath: '',
+        assetType: '',
+        compoundCode: '',
+        acquiredAt: '',
+        tags: [],
+        updated: new Date(file.stat.mtime).toISOString(),
+        size: file.stat.size
+      });
+    }
+
     return records.sort((a, b) => String(b.updated).localeCompare(String(a.updated)) || a.title.localeCompare(b.title));
   }
 
