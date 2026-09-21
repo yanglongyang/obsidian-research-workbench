@@ -31,6 +31,8 @@ const entries = [
   ['./lib/modals/data-asset-modal', path.join(pluginDir, 'lib', 'modals', 'data-asset-modal.js')],
   ['./lib/modals/migration-modal', path.join(pluginDir, 'lib', 'modals', 'migration-modal.js')],
   ['./lib/modals/nmr-ledger-migration-modal', path.join(pluginDir, 'lib', 'modals', 'nmr-ledger-migration-modal.js')],
+  ['./lib/modals/delete-note-modal', path.join(pluginDir, 'lib', 'modals', 'delete-note-modal.js')],
+  ['./lib/modals/canvas-modal', path.join(pluginDir, 'lib', 'modals', 'canvas-modal.js')],
   ['./lib/view', path.join(pluginDir, 'lib', 'view.js')],
   ['./main', path.join(pluginDir, 'main.src.js')]
 ];
@@ -58,6 +60,8 @@ function normalizeLocalRequires(id, source) {
       .replace("require('./modals/data-asset-modal')", "require('./lib/modals/data-asset-modal')")
       .replace("require('./modals/migration-modal')", "require('./lib/modals/migration-modal')")
       .replace("require('./modals/nmr-ledger-migration-modal')", "require('./lib/modals/nmr-ledger-migration-modal')")
+      .replace("require('./modals/delete-note-modal')", "require('./lib/modals/delete-note-modal')")
+      .replace("require('./modals/canvas-modal')", "require('./lib/modals/canvas-modal')")
       .replace("require('./ui/page-renderers')", "require('./lib/ui/page-renderers')");
   }
   if (id === './lib/ui/page-renderers') return source;
@@ -82,6 +86,8 @@ function normalizeLocalRequires(id, source) {
   if (id === './lib/modals/data-asset-modal') return source.replace("require('../entities/data-asset')", "require('./lib/entities/data-asset')").replace("require('../data')", "require('./lib/data')");
   if (id === './lib/modals/migration-modal') return source.replace("require('../migrations/permanent-id')", "require('./lib/migrations/permanent-id')").replace("require('../data')", "require('./lib/data')");
   if (id === './lib/modals/nmr-ledger-migration-modal') return source.replace("require('../entities/nmr-ledger')", "require('./lib/entities/nmr-ledger')");
+  if (id === './lib/modals/delete-note-modal') return source;
+  if (id === './lib/modals/canvas-modal') return source;
   if (id === './lib/nmr') return source.replace("require('./database')", "require('./lib/database')").replace("require('./entities/nmr-ledger')", "require('./lib/entities/nmr-ledger')").replace("require('./data')", "require('./lib/data')");
   if (id === './lib/entities/nmr-ledger') return source.replace("require('./data-asset')", "require('./lib/entities/data-asset')");
   if (id === './lib/settings') return source;
