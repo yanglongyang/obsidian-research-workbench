@@ -1708,3 +1708,91 @@
     gap: 3px;
   }
 }
+
+
+/* Note management and Canvas creation. */
+.phdcc-view .phdcc-task-side,
+.phdcc-view .phdcc-file-row-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.phdcc-view .phdcc-project-card-menu {
+  flex: 0 0 auto;
+}
+
+.phdcc-view .phdcc-row-action-danger,
+.phdcc-view .phdcc-btn-danger {
+  color: var(--phdcc-danger);
+}
+
+.phdcc-view .phdcc-row-menu-panel .phdcc-row-action-danger:hover {
+  color: var(--phdcc-danger);
+  background: var(--phdcc-danger-soft);
+}
+
+.phdcc-view .phdcc-btn-danger {
+  background: var(--phdcc-danger-soft);
+  border: 1px solid color-mix(in srgb, var(--phdcc-danger) 28%, var(--phdcc-border));
+}
+
+.phdcc-view .phdcc-btn-danger:hover {
+  color: var(--phdcc-danger);
+  background: color-mix(in srgb, var(--phdcc-danger) 13%, var(--phdcc-surface));
+  border-color: color-mix(in srgb, var(--phdcc-danger) 40%, var(--phdcc-border));
+}
+
+.phdcc-delete-note-title {
+  margin-top: 16px;
+  font-size: 16px;
+  font-weight: 720;
+}
+
+.phdcc-delete-note-path {
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.phdcc-delete-note-warning {
+  margin-top: 16px;
+  padding: 12px;
+  color: var(--text-normal);
+  background: color-mix(in srgb, var(--text-error) 6%, var(--background-secondary));
+  border: 1px solid color-mix(in srgb, var(--text-error) 25%, var(--background-modifier-border));
+  border-radius: 8px;
+}
+
+.phdcc-delete-note-warning-title {
+  margin-bottom: 6px;
+  color: var(--text-error);
+  font-weight: 700;
+}
+
+.phdcc-delete-note-warning-copy {
+  margin-top: 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.phdcc-delete-note-confirm {
+  color: var(--text-on-accent);
+  background: var(--text-error);
+}
+
+.phdcc-delete-note-confirm:hover {
+  background: color-mix(in srgb, var(--text-error) 88%, black);
+}
+
+@media (max-width: 650px) {
+  .phdcc-view .phdcc-task-side,
+  .phdcc-view .phdcc-file-row-controls {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+}
