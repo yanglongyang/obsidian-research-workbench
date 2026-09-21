@@ -49,9 +49,11 @@ function renderProjectHub(view, project) {
   open.addEventListener('click', () => { if (project.file) void view.openFile(project.file); });
   const add = heroActions.createEl('button', { cls: 'phdcc-page-add', text: '+ 新建实验', attr: { type: 'button' } });
   add.addEventListener('click', () => view.openExperimentModal({ projectId: project.id, project: project.title }));
-  const canvas = heroActions.createEl('button', { cls: 'phdcc-btn phdcc-btn-secondary', text: '+ 新建白板', attr: { type: 'button' } });
-  canvas.addEventListener('click', () => view.openCanvasModal({ title: `${project.title} - 白板` }));
-  if (project.file) {
+  if (typeof view.openCanvasModal === 'function') {
+    const canvas = heroActions.createEl('button', { cls: 'phdcc-btn phdcc-btn-secondary', text: '+ 新建白板', attr: { type: 'button' } });
+    canvas.addEventListener('click', () => view.openCanvasModal({ title: `${project.title} - 白板` }));
+  }
+  if (project.file && typeof view.addTrashAction === 'function') {
     view.addTrashAction(heroActions, project.file, {
       title: project.title,
       recordId: project.id,
@@ -171,7 +173,7 @@ function renderExperimentItem(view, container, item, project) {
   const side = row.createDiv({ cls: 'phdcc-experiment-side' }); badge(side, STATUS_LABELS[item.status] || '未设置', item.status === 'blocked' ? 'danger' : item.status === 'complete' ? 'success' : 'info');
   const suggest = suggestProjectForExperiment(item, view.entityStore.listCompounds(), view.entityStore.listProjects()); if (suggest) row.createDiv({ cls: 'phdcc-file-next', text: `建议归属：${suggest.title}（${suggest.reason}）` });
   const change = side.createEl('button', { cls: 'phdcc-row-action', text: '修改归属', attr: { type: 'button' } }); change.addEventListener('click', () => view.openProjectRelationModal(item));
-  if (item.file) view.addTrashAction(side, item.file, { title: item.title, recordId: item.id, label: '移到回收站' });
+  if (item.file && typeof view.addTrashAction === 'function') view.addTrashAction(side, item.file, { title: item.title, recordId: item.id, label: '移到回收站' });
 }
 
 module.exports = { renderProjectHub, suggestProjectForExperiment };
