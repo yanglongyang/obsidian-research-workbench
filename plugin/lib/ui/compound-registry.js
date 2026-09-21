@@ -126,7 +126,7 @@ function renderCompoundRegistry(view, compounds, options = {}) {
     copy.addEventListener('click', () => void copySmiles(compound));
     const open = actions.createEl('button', { cls: 'phdcc-row-action', text: '打开', attr: { type: 'button' } });
     open.addEventListener('click', () => void view.openFile(compound.file));
-    if (compound.file) view.addTrashAction(actions, compound.file, { title: compound.title, recordId: compound.id });
+    if (compound.file && typeof view.addTrashAction === 'function') view.addTrashAction(actions, compound.file, { title: compound.title, recordId: compound.id });
   });
   if (!items.length) root.createDiv({ cls: 'phdcc-compound-placeholder', text: '暂无化合物记录' });
   return root;
