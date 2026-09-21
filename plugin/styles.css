@@ -758,13 +758,14 @@
 .phdcc-view .phdcc-archive-arrow { margin: 5px 0; color: var(--phdcc-muted); font-size: 11px; }
 .phdcc-view .phdcc-archive-checks { display: flex; flex-wrap: wrap; gap: 5px; }
 
-.phdcc-quick-create-modal {
-  width: 700px;
-  max-width: 92vw;
+.phdcc-task-modal.phdcc-quick-create-modal {
+  width: min(760px, 94vw);
+  max-width: 94vw;
 }
 
 .phdcc-quick-create-modal .modal-content {
   max-width: none;
+  overflow-x: hidden;
 }
 
 .phdcc-quick-create-modal .phdcc-modal-subtitle {
@@ -828,7 +829,8 @@
 .phdcc-quick-create-description {
   color: var(--text-muted);
   font-size: 11.5px;
-  line-height: 1.35;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 620px) {
@@ -875,10 +877,13 @@
 }
 
 .phdcc-task-modal {
-  width: 520px;
   max-width: 92vw;
   color: var(--phdcc-text);
   background: var(--phdcc-bg);
+}
+
+.phdcc-task-modal:not(.phdcc-quick-create-modal) {
+  width: 520px;
 }
 
 .phdcc-task-modal .setting-item {
@@ -1101,32 +1106,112 @@
   opacity: .82;
 }
 .phdcc-view .phdcc-file-row-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
 }
+
 .phdcc-view .phdcc-file-row-head .phdcc-file-title {
   min-width: 0;
-  flex: 1;
   padding-right: 0;
+  overflow-wrap: anywhere;
 }
-.phdcc-view .phdcc-file-row-head .phdcc-badge {
-  flex: 0 0 auto;
-  max-width: 48%;
+
+.phdcc-view .phdcc-file-row-controls {
+  display: flex;
+  max-width: 360px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
 }
-@media (max-width: 700px) {
+
+.phdcc-view .phdcc-file-row-controls .phdcc-badge {
+  max-width: 280px;
+  white-space: normal;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
   .phdcc-view .phdcc-file-row-head {
-    flex-wrap: wrap;
+    grid-template-columns: 1fr;
+    gap: 7px;
   }
 
-  .phdcc-view .phdcc-file-row-head .phdcc-badge {
+  .phdcc-view .phdcc-file-row-controls {
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+
+  .phdcc-view .phdcc-file-row-controls .phdcc-badge {
     max-width: 100%;
   }
 }
 .phdcc-view .phdcc-empty { padding: 24px 16px; border-color: var(--phdcc-border); border-radius: var(--phdcc-radius-md); }
-.phdcc-view .phdcc-db-path { max-width: 100%; color: var(--phdcc-faint); overflow-wrap: anywhere; }
-.phdcc-view .phdcc-db-actions { gap: 5px; margin-top: 6px; }
+.phdcc-view .phdcc-db-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  grid-template-areas:
+    "title actions"
+    "meta actions"
+    "path actions"
+    "id actions";
+  column-gap: 14px;
+  align-items: start;
+  padding: 11px 0;
+}
+
+.phdcc-view .phdcc-db-row > .phdcc-file-title {
+  grid-area: title;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.phdcc-view .phdcc-db-meta {
+  grid-area: meta;
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.phdcc-view .phdcc-db-path {
+  grid-area: path;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 4px;
+  color: var(--phdcc-faint);
+  overflow-wrap: anywhere;
+}
+
+.phdcc-view .phdcc-db-row > .phdcc-record-id {
+  grid-area: id;
+  margin-top: 2px;
+}
+
+.phdcc-view .phdcc-db-actions {
+  grid-area: actions;
+  display: flex;
+  width: 34px;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 0;
+  margin-top: 0;
+}
+
+.phdcc-view .phdcc-db-actions .phdcc-row-menu {
+  width: 30px;
+}
+
+@media (max-width: 700px) {
+  .phdcc-view .phdcc-db-row {
+    grid-template-columns: minmax(0, 1fr) 32px;
+    column-gap: 8px;
+  }
+}
 .phdcc-view .phdcc-db-warning { padding: 9px 11px; border-radius: var(--phdcc-radius-md); background: var(--phdcc-danger-soft); }
 .phdcc-view .phdcc-nmr-states { gap: 4px; margin-top: 5px; }
 .phdcc-view .phdcc-nmr-note { padding: 8px 10px; background: var(--phdcc-surface-soft); border-radius: var(--phdcc-radius-sm); }
@@ -1791,8 +1876,7 @@
 
 
 /* Note management and Canvas creation. */
-.phdcc-view .phdcc-task-side,
-.phdcc-view .phdcc-file-row-controls {
+.phdcc-view .phdcc-task-side {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -1870,8 +1954,7 @@
 }
 
 @media (max-width: 650px) {
-  .phdcc-view .phdcc-task-side,
-  .phdcc-view .phdcc-file-row-controls {
+  .phdcc-view .phdcc-task-side {
     align-items: flex-start;
     flex-wrap: wrap;
   }
