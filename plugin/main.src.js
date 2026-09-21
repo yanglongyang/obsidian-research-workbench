@@ -11,7 +11,7 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
     this.refreshTimer = null;
     this.registerView(VIEW_TYPE, (leaf) => new WorkbenchView(leaf, this));
 
-    this.addRibbonIcon('layout-dashboard', '打开科研工作台', () => {
+    this.addRibbonIcon('microscope', '打开科研工作台', () => {
       void this.activateView();
     });
 

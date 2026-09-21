@@ -16,6 +16,7 @@ class QuickCreateModal extends Modal {
       ['folder-kanban', '课题', '建立一个可关联实验和数据的课题', 'project'],
       ['atom', '化合物', '登记化合物与表征信息', 'compound'],
       ['database', '数据资产', '登记 NMR、HPLC、MS 等数据', 'data-asset'],
+      ['workflow', '白板', '创建用于汇总科研信息的 Obsidian Canvas', 'canvas'],
       ['notebook-pen', '今日复盘', '创建一条复盘任务', 'review']
     ];
     const list = this.contentEl.createDiv({ cls: 'phdcc-quick-create-list' });
@@ -33,6 +34,7 @@ class QuickCreateModal extends Modal {
         if (type === 'project' && typeof this.options.onProject === 'function') this.options.onProject();
         if (type === 'compound' && typeof this.options.onCompound === 'function') this.options.onCompound();
         if (type === 'data-asset' && typeof this.options.onDataAsset === 'function') this.options.onDataAsset();
+        if (type === 'canvas' && typeof this.options.onCanvas === 'function') this.options.onCanvas();
         if (type === 'review' && typeof this.options.onReview === 'function') this.options.onReview();
       });
       if (index === 0) window.setTimeout(() => button.focus(), 50);

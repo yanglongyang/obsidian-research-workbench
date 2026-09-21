@@ -558,6 +558,40 @@ class ResearchDatabase {
         size: file.stat.size
       });
     }
+
+    for (const file of this.app.vault.getFiles()) {
+      if (file.extension !== 'canvas' || !isManagedPath(file.path) || isDerivedPath(file.path)) continue;
+      const path = normalizePath(file.path);
+      records.push({
+        id: `LEGACY-CANVAS-${simpleHash(path)}`,
+        identitySource: 'legacy-path',
+        type: 'canvas',
+        title: file.basename,
+        path,
+        folder: path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '',
+        kind: 'canvas',
+        status: '',
+        priority: '',
+        category: '',
+        date: '',
+        project: '',
+        projectId: '',
+        compoundId: '',
+        experimentId: '',
+        dataAssetId: '',
+        parentId: '',
+        relatedIds: [],
+        sample: '',
+        dataPath: '',
+        assetType: '',
+        compoundCode: '',
+        acquiredAt: '',
+        tags: [],
+        updated: new Date(file.stat.mtime).toISOString(),
+        size: file.stat.size
+      });
+    }
+
     return records.sort((a, b) => String(b.updated).localeCompare(String(a.updated)) || a.title.localeCompare(b.title));
   }
 
@@ -1274,6 +1308,22 @@ function renderProjectHub(view, project) {
   open.addEventListener('click', () => { if (project.file) void view.openFile(project.file); });
   const add = heroActions.createEl('button', { cls: 'phdcc-page-add', text: '+ 新建实验', attr: { type: 'button' } });
   add.addEventListener('click', () => view.openExperimentModal({ projectId: project.id, project: project.title }));
+  if (typeof view.openCanvasModal === 'function') {
+    const canvas = heroActions.createEl('button', { cls: 'phdcc-btn phdcc-btn-secondary', text: '+ 新建白板', attr: { type: 'button' } });
+    canvas.addEventListener('click', () => view.openCanvasModal({ title: `${project.title} - 白板` }));
+  }
+  if (project.file && typeof view.addTrashAction === 'function') {
+    view.addTrashAction(heroActions, project.file, {
+      title: project.title,
+      recordId: project.id,
+      className: 'phdcc-btn phdcc-btn-danger',
+      relations: [
+        { label: '关联实验', count: relation.experiments.length },
+        { label: '关联化合物', count: relation.compounds.length },
+        { label: '关联数据资产', count: relation.dataAssets.length }
+      ]
+    });
+  }
 
   const heroBody = hero.createDiv({ cls: 'phdcc-project-hero-body' });
   const titleBlock = heroBody.createDiv({ cls: 'phdcc-project-hero-title-block' });
@@ -1382,6 +1432,7 @@ function renderExperimentItem(view, container, item, project) {
   const side = row.createDiv({ cls: 'phdcc-experiment-side' }); badge(side, STATUS_LABELS[item.status] || '未设置', item.status === 'blocked' ? 'danger' : item.status === 'complete' ? 'success' : 'info');
   const suggest = suggestProjectForExperiment(item, view.entityStore.listCompounds(), view.entityStore.listProjects()); if (suggest) row.createDiv({ cls: 'phdcc-file-next', text: `建议归属：${suggest.title}（${suggest.reason}）` });
   const change = side.createEl('button', { cls: 'phdcc-row-action', text: '修改归属', attr: { type: 'button' } }); change.addEventListener('click', () => view.openProjectRelationModal(item));
+  if (item.file && typeof view.addTrashAction === 'function') view.addTrashAction(side, item.file, { title: item.title, recordId: item.id, label: '移到回收站' });
 }
 
 module.exports = { renderProjectHub, suggestProjectForExperiment };
@@ -1544,6 +1595,7 @@ function renderCompoundRegistry(view, compounds, options = {}) {
     copy.addEventListener('click', () => void copySmiles(compound));
     const open = actions.createEl('button', { cls: 'phdcc-row-action', text: '打开', attr: { type: 'button' } });
     open.addEventListener('click', () => void view.openFile(compound.file));
+    if (compound.file && typeof view.addTrashAction === 'function') view.addTrashAction(actions, compound.file, { title: compound.title, recordId: compound.id });
   });
   if (!items.length) root.createDiv({ cls: 'phdcc-compound-placeholder', text: '暂无化合物记录' });
   return root;
@@ -2978,6 +3030,7 @@ class QuickCreateModal extends Modal {
       ['folder-kanban', '课题', '建立一个可关联实验和数据的课题', 'project'],
       ['atom', '化合物', '登记化合物与表征信息', 'compound'],
       ['database', '数据资产', '登记 NMR、HPLC、MS 等数据', 'data-asset'],
+      ['workflow', '白板', '创建用于汇总科研信息的 Obsidian Canvas', 'canvas'],
       ['notebook-pen', '今日复盘', '创建一条复盘任务', 'review']
     ];
     const list = this.contentEl.createDiv({ cls: 'phdcc-quick-create-list' });
@@ -2995,6 +3048,7 @@ class QuickCreateModal extends Modal {
         if (type === 'project' && typeof this.options.onProject === 'function') this.options.onProject();
         if (type === 'compound' && typeof this.options.onCompound === 'function') this.options.onCompound();
         if (type === 'data-asset' && typeof this.options.onDataAsset === 'function') this.options.onDataAsset();
+        if (type === 'canvas' && typeof this.options.onCanvas === 'function') this.options.onCanvas();
         if (type === 'review' && typeof this.options.onReview === 'function') this.options.onReview();
       });
       if (index === 0) window.setTimeout(() => button.focus(), 50);
@@ -3284,6 +3338,178 @@ class NmrLedgerMigrationModal extends Modal {
 module.exports = { NmrLedgerMigrationModal };
 
 },
+"./lib/modals/delete-note-modal": function (module, exports, require) {
+const { Modal, Notice } = require('obsidian');
+
+class DeleteNoteModal extends Modal {
+  constructor(app, file, options = {}) {
+    super(app);
+    this.file = file;
+    this.options = options;
+    this.deleting = false;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    this.modalEl.addClass('phdcc-task-modal', 'phdcc-delete-note-modal');
+    contentEl.createEl('h2', { text: '移到回收站？' });
+    contentEl.createDiv({ cls: 'phdcc-modal-subtitle', text: '文件会按照 Obsidian 当前的删除设置处理，不会级联删除关联科研记录。' });
+
+    const title = this.options.title || this.file?.basename || this.file?.name || '未命名文件';
+    contentEl.createDiv({ cls: 'phdcc-delete-note-title', text: title });
+    if (this.file?.path) contentEl.createDiv({ cls: 'phdcc-delete-note-path', text: this.file.path });
+    if (this.options.recordId) contentEl.createDiv({ cls: 'phdcc-record-id', text: this.options.recordId });
+
+    const relations = Array.isArray(this.options.relations) ? this.options.relations.filter((item) => Number(item?.count) > 0) : [];
+    if (relations.length) {
+      const warning = contentEl.createDiv({ cls: 'phdcc-delete-note-warning' });
+      warning.createDiv({ cls: 'phdcc-delete-note-warning-title', text: '关联提醒' });
+      relations.forEach((item) => warning.createDiv({ text: `${item.label}：${item.count}` }));
+      warning.createDiv({ cls: 'phdcc-delete-note-warning-copy', text: '删除当前文件后，这些记录仍会保留；缺失引用会由“关系检查”继续提示。' });
+    }
+
+    const footer = contentEl.createDiv({ cls: 'modal-button-container' });
+    const cancel = footer.createEl('button', { text: '取消', attr: { type: 'button' } });
+    cancel.addEventListener('click', () => this.close());
+    const remove = footer.createEl('button', { text: '移到回收站', cls: 'mod-warning phdcc-delete-note-confirm', attr: { type: 'button' } });
+    remove.addEventListener('click', async () => {
+      if (this.deleting || !this.file) return;
+      this.deleting = true;
+      remove.disabled = true;
+      cancel.disabled = true;
+      try {
+        await this.app.fileManager.trashFile(this.file);
+        this.close();
+        new Notice(`已移到回收站：${title}`);
+        if (typeof this.options.onDeleted === 'function') await this.options.onDeleted(this.file);
+      } catch (error) {
+        this.deleting = false;
+        remove.disabled = false;
+        cancel.disabled = false;
+        new Notice(error instanceof Error ? error.message : '删除文件失败');
+      }
+    });
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+module.exports = { DeleteNoteModal };
+
+},
+"./lib/modals/canvas-modal": function (module, exports, require) {
+const { Modal, Notice, Setting, normalizePath } = require('obsidian');
+
+const DEFAULT_CANVAS_FOLDER = '00-博士工作台/08-白板';
+
+function sanitizeCanvasName(value) {
+  const clean = String(value || '')
+    .replace(/[<>:"/\\|?*]/g, '')
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(/^[\s.]+|[\s.]+$/g, '')
+    .slice(0, 80)
+    .replace(/^[\s.]+|[\s.]+$/g, '');
+  return clean || '科研白板';
+}
+
+async function ensureFolder(vault, folder) {
+  const target = normalizePath(folder || DEFAULT_CANVAS_FOLDER).replace(/\/+$/, '');
+  if (!target || target.split('/').includes('..')) throw new Error('白板目录无效');
+  let current = '';
+  for (const segment of target.split('/').filter(Boolean)) {
+    current = current ? `${current}/${segment}` : segment;
+    if (vault.getAbstractFileByPath(current)) continue;
+    try {
+      await vault.createFolder(current);
+    } catch (error) {
+      if (!vault.getAbstractFileByPath(current)) throw error;
+    }
+  }
+  return target;
+}
+
+function availableCanvasPath(vault, folder, title) {
+  const safe = sanitizeCanvasName(title);
+  let index = 1;
+  let path = normalizePath(`${folder}/${safe}.canvas`);
+  while (vault.getAbstractFileByPath(path)) {
+    index += 1;
+    path = normalizePath(`${folder}/${safe} ${index}.canvas`);
+  }
+  return path;
+}
+
+class CanvasCreateModal extends Modal {
+  constructor(app, options = {}) {
+    super(app);
+    this.options = options;
+    this.state = {
+      title: String(options.title || ''),
+      folder: String(options.folder || DEFAULT_CANVAS_FOLDER),
+      openAfterCreate: options.openAfterCreate !== false,
+      saving: false
+    };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    this.modalEl.addClass('phdcc-task-modal', 'phdcc-canvas-modal');
+    contentEl.createEl('h2', { text: '新建白板' });
+    contentEl.createDiv({ cls: 'phdcc-modal-subtitle', text: '创建原生 Obsidian Canvas，用于汇总文献、实验、结构式和科研思路。' });
+
+    new Setting(contentEl).setName('名称').addText((text) => {
+      text.inputEl.placeholder = '例如：GalP 机制与实验汇总';
+      text.setValue(this.state.title);
+      text.onChange((value) => { this.state.title = value; });
+      window.setTimeout(() => text.inputEl.focus(), 50);
+    });
+
+    new Setting(contentEl).setName('保存位置').setDesc('Vault 内路径').addText((text) => {
+      text.setValue(this.state.folder);
+      text.onChange((value) => { this.state.folder = value; });
+    });
+
+    new Setting(contentEl).setName('创建后打开').addToggle((toggle) => {
+      toggle.setValue(this.state.openAfterCreate);
+      toggle.onChange((value) => { this.state.openAfterCreate = value; });
+    });
+
+    const footer = contentEl.createDiv({ cls: 'modal-button-container' });
+    footer.createEl('button', { text: '取消', attr: { type: 'button' } }).addEventListener('click', () => this.close());
+    const create = footer.createEl('button', { text: '创建白板', cls: 'mod-cta', attr: { type: 'button' } });
+    create.addEventListener('click', () => { void this.submit(create); });
+  }
+
+  async submit(button) {
+    if (this.state.saving) return;
+    const title = sanitizeCanvasName(this.state.title);
+    this.state.saving = true;
+    button.disabled = true;
+    try {
+      const folder = await ensureFolder(this.app.vault, this.state.folder || DEFAULT_CANVAS_FOLDER);
+      const path = availableCanvasPath(this.app.vault, folder, title);
+      const file = await this.app.vault.create(path, JSON.stringify({ nodes: [], edges: [] }, null, 2) + '\n');
+      this.close();
+      if (this.state.openAfterCreate) await this.app.workspace.getLeaf(false).openFile(file);
+      if (typeof this.options.onCreated === 'function') await this.options.onCreated(file);
+      new Notice(`已创建白板：${file.basename}`);
+    } catch (error) {
+      this.state.saving = false;
+      button.disabled = false;
+      new Notice(error instanceof Error ? error.message : '创建白板失败');
+    }
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+module.exports = { DEFAULT_CANVAS_FOLDER, CanvasCreateModal };
+
+},
 "./lib/view": function (module, exports, require) {
 const { ItemView, Modal, Notice, Setting, setIcon } = require('obsidian');
 const {
@@ -3312,6 +3538,8 @@ const { CompoundModal } = require('./lib/modals/compound-modal');
 const { DataAssetModal } = require('./lib/modals/data-asset-modal');
 const { MigrationModal } = require('./lib/modals/migration-modal');
 const { NmrLedgerMigrationModal } = require('./lib/modals/nmr-ledger-migration-modal');
+const { DeleteNoteModal } = require('./lib/modals/delete-note-modal');
+const { CanvasCreateModal } = require('./lib/modals/canvas-modal');
 const { projectRelations, unassignedExperiments, suggestProjectForExperiment, updateExperimentProject, batchAssignExperiments, upgradeLegacyExperimentAndAssign } = require('./lib/entities/project-relations');
 const projectHubUi = require('./lib/ui/project-hub');
 const unassignedUi = require('./lib/ui/unassigned-experiments');
@@ -3323,7 +3551,7 @@ const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 const PRIORITY_LABEL = { high: '高', medium: '中', low: '低' };
 const EXPERIMENT_STATUS_LABEL = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻' };
 const PROJECT_STATUS_LABEL = { planning: '计划中', doing: '进行中', complete: '已完成', blocked: '受阻', active: '进行中', archived: '已归档' };
-const DATABASE_TYPE_LABELS = { task: '任务', experiment: '实验', project: '课题', compound: '化合物', 'data-asset': '数据资产', data: '数据', literature: '文献', writing: '写作', progress: '进展', note: '其他' };
+const DATABASE_TYPE_LABELS = { task: '任务', experiment: '实验', project: '课题', compound: '化合物', 'data-asset': '数据资产', data: '数据', literature: '文献', writing: '写作', progress: '进展', canvas: '白板', note: '其他' };
 const VALID_SECTIONS = new Set(['overview', 'today', 'calendar', 'reviews', 'projects', 'unassigned-experiments', 'experiments', 'compound', 'nmr-inbox', 'work-queue', 'data', 'literature', 'writing', 'daily-review', 'research-db', 'integrity']);
 
 const NAV_GROUPS = [
@@ -3629,8 +3857,74 @@ class WorkbenchView extends ItemView {
       onProject: () => this.openProjectModal(),
       onCompound: () => this.openCompoundModal(),
       onDataAsset: () => this.openDataAssetModal(),
+      onCanvas: () => this.openCanvasModal(),
       onReview: () => this.openTaskModal({ category: '复盘', due: localDate() })
     }).open();
+  }
+
+  openCanvasModal(options = {}) {
+    new CanvasCreateModal(this.app, {
+      title: options.title || '',
+      folder: options.folder,
+      openAfterCreate: options.openAfterCreate !== false,
+      onCreated: async (file) => {
+        await this.researchDatabase.refresh();
+        if (typeof options.onCreated === 'function') await options.onCreated(file);
+        window.setTimeout(() => { void this.refresh(); }, 100);
+      }
+    }).open();
+  }
+
+  deletionRelationsFor(file, explicitId = '') {
+    if (!file) return [];
+    const info = this.fileInfo(file);
+    const id = String(explicitId || info.recordId || '').trim();
+    if (!id || id.startsWith('LEGACY-CANVAS-')) return [];
+    const records = Array.isArray(this.researchDatabase.records) ? this.researchDatabase.records : [];
+    const refs = records.filter((record) =>
+      record.path !== file.path &&
+      (
+        record.projectId === id ||
+        record.experimentId === id ||
+        record.compoundId === id ||
+        record.dataAssetId === id ||
+        record.parentId === id ||
+        (Array.isArray(record.relatedIds) && record.relatedIds.includes(id))
+      )
+    );
+    const labels = { experiment: '关联实验', compound: '关联化合物', 'data-asset': '关联数据资产', project: '关联课题', task: '关联任务', literature: '关联文献', writing: '关联写作', canvas: '关联白板' };
+    const counts = {};
+    refs.forEach((record) => {
+      const label = labels[record.type] || '其他关联';
+      counts[label] = (counts[label] || 0) + 1;
+    });
+    return Object.entries(counts).map(([label, count]) => ({ label, count }));
+  }
+
+  openDeleteNoteModal(file, options = {}) {
+    if (!file) return void new Notice('文件不存在，无法删除');
+    const info = file.extension === 'md' ? this.fileInfo(file) : { title: file.basename, recordId: '' };
+    new DeleteNoteModal(this.app, file, {
+      title: options.title || info.title || file.basename,
+      recordId: options.recordId || info.recordId || '',
+      relations: options.relations || this.deletionRelationsFor(file, options.recordId),
+      onDeleted: async () => {
+        if (options.recordId && options.recordId === this.selectedProjectId) this.selectedProjectId = '';
+        try { await this.researchDatabase.refresh(); } catch (error) {}
+        if (typeof options.onDeleted === 'function') await options.onDeleted(file);
+        await this.refresh();
+      }
+    }).open();
+  }
+
+  addTrashAction(container, file, options = {}) {
+    const button = container.createEl('button', {
+      cls: `phdcc-row-action phdcc-row-action-danger${options.className ? ` ${options.className}` : ''}`,
+      text: options.label || '移到回收站',
+      attr: { type: 'button', title: options.title || '将此文件移到 Obsidian 回收站' }
+    });
+    button.addEventListener('click', () => this.openDeleteNoteModal(file, options));
+    return button;
   }
 
   openTaskModal(options = {}) {
@@ -3887,8 +4181,15 @@ class WorkbenchView extends ItemView {
     makeInteractive(title, () => { void this.openFile(task.file); });
     const parts = [task.category, formatMinutes(task.estimate), formatRelativeDate(task.due)].filter(Boolean);
     main.createDiv({ cls: 'phdcc-task-meta', text: parts.join(' · ') });
-    const badge = createBadge(row, PRIORITY_LABEL[task.priority] || '中', badgeTone(task.priority, 'priority'));
+    const side = row.createDiv({ cls: 'phdcc-task-side' });
+    const badge = createBadge(side, PRIORITY_LABEL[task.priority] || '中', badgeTone(task.priority, 'priority'));
     badge.setAttr('aria-label', `优先级${badge.textContent}`);
+    const menu = side.createEl('details', { cls: 'phdcc-row-menu' });
+    menu.createEl('summary', { text: '⋯', attr: { title: '更多操作', 'aria-label': `${task.title} 更多操作` } });
+    const panel = menu.createDiv({ cls: 'phdcc-row-menu-panel' });
+    const open = panel.createEl('button', { cls: 'phdcc-row-action', text: '打开任务笔记', attr: { type: 'button' } });
+    open.addEventListener('click', () => { menu.removeAttribute('open'); void this.openFile(task.file); });
+    this.addTrashAction(panel, task.file, { title: task.title, recordId: task.recordId });
   }
 
   renderToday() {
@@ -3982,6 +4283,20 @@ class WorkbenchView extends ItemView {
         }
       });
       if (info.status) createBadge(header, PROJECT_STATUS_LABEL[info.status] || info.status, badgeTone(info.status));
+      const menu = header.createEl('details', { cls: 'phdcc-row-menu phdcc-project-card-menu' });
+      menu.createEl('summary', { text: '⋯', attr: { title: '更多操作', 'aria-label': `${info.title} 更多操作` } });
+      const panel = menu.createDiv({ cls: 'phdcc-row-menu-panel' });
+      const open = panel.createEl('button', { cls: 'phdcc-row-action', text: '打开课题笔记', attr: { type: 'button' } });
+      open.addEventListener('click', () => { menu.removeAttribute('open'); void this.openFile(file); });
+      this.addTrashAction(panel, file, {
+        title: info.title,
+        recordId: info.projectId || info.recordId,
+        relations: relation ? [
+          { label: '关联实验', count: relation.experiments.length },
+          { label: '关联化合物', count: relation.compounds.length },
+          { label: '关联数据资产', count: relation.dataAssets.length }
+        ] : undefined
+      });
 
       const identity = card.createDiv({ cls: 'phdcc-project-identity' });
       if (info.projectId) identity.createSpan({ cls: 'phdcc-record-id', text: info.projectId });
@@ -4095,6 +4410,7 @@ class WorkbenchView extends ItemView {
       menu.removeAttribute('open');
       void this.openFile(file);
     });
+    this.addTrashAction(panel, file, { title: info.title, recordId: info.recordId });
   }
 
   _renderResearchDatabasePage() {
@@ -4207,11 +4523,15 @@ class WorkbenchView extends ItemView {
           new Notice(`路径：${record.path}`);
         }
       });
-      const copyId = menu.createEl('button', { text: '复制 Record ID', attr: { type: 'button' } });
-      copyId.addEventListener('click', async () => {
-        try { await navigator.clipboard.writeText(record.id); new Notice('已复制 Record ID'); }
-        catch (error) { new Notice(`Record ID：${record.id}`); }
-      });
+      if (record.id && record.type !== 'canvas') {
+        const copyId = menu.createEl('button', { text: '复制 Record ID', attr: { type: 'button' } });
+        copyId.addEventListener('click', async () => {
+          try { await navigator.clipboard.writeText(record.id); new Notice('已复制 Record ID'); }
+          catch (error) { new Notice(`Record ID：${record.id}`); }
+        });
+      }
+      const recordFile = this.app.vault.getAbstractFileByPath(record.path);
+      if (recordFile) this.addTrashAction(menu, recordFile, { title: record.title, recordId: record.type === 'canvas' ? '' : record.id });
     });
   }
 
@@ -4222,7 +4542,20 @@ class WorkbenchView extends ItemView {
     consolidate.addEventListener('click', () => this.openNmrLedgerMigrationModal());
     const card = this.pageEl.createDiv({ cls: 'phdcc-card phdcc-file-card phdcc-data-explorer' });
     const assets = this.entityStore.listDataAssets().filter((item) => !this.searchQuery || `${item.title} ${item.assetType} ${item.dataPath} ${item.id}`.toLowerCase().includes(this.searchQuery.toLowerCase()));
-    if (assets.length) assets.forEach((item) => { const row = card.createDiv({ cls: 'phdcc-file-row' }); const title = row.createDiv({ cls: 'phdcc-file-title', text: item.title }); makeInteractive(title, () => { void this.openFile(item.file); }); row.createDiv({ cls: 'phdcc-file-meta', text: `${item.assetType || 'other'} · ${item.project || '未关联课题'} · ${item.id}` }); row.createDiv({ cls: 'phdcc-file-next', text: item.dataPath || '未记录数据路径' }); });
+    if (assets.length) assets.forEach((item) => {
+      const row = card.createDiv({ cls: 'phdcc-file-row' });
+      const head = row.createDiv({ cls: 'phdcc-file-row-head' });
+      const title = head.createDiv({ cls: 'phdcc-file-title', text: item.title });
+      makeInteractive(title, () => { void this.openFile(item.file); });
+      const menu = head.createEl('details', { cls: 'phdcc-row-menu' });
+      menu.createEl('summary', { text: '⋯', attr: { title: '更多操作', 'aria-label': `${item.title} 更多操作` } });
+      const panel = menu.createDiv({ cls: 'phdcc-row-menu-panel' });
+      const open = panel.createEl('button', { cls: 'phdcc-row-action', text: '打开数据资产笔记', attr: { type: 'button' } });
+      open.addEventListener('click', () => { menu.removeAttribute('open'); void this.openFile(item.file); });
+      this.addTrashAction(panel, item.file, { title: item.title, recordId: item.id });
+      row.createDiv({ cls: 'phdcc-file-meta', text: `${item.assetType || 'other'} · ${item.project || '未关联课题'} · ${item.id}` });
+      row.createDiv({ cls: 'phdcc-file-next', text: item.dataPath || '未记录数据路径' });
+    });
     const legacy = this.filteredFiles(this.readOnlyItems(DATA_FOLDER, 30, true));
     if (legacy.length) { card.createEl('h3', { text: '旧数据记录（只读）' }); this.renderReadOnlyList(card, legacy, ''); }
     if (!assets.length && !legacy.length) card.createDiv({ cls: 'phdcc-empty', text: this.searchQuery ? '没有匹配数据资产' : '暂无数据资产' });
@@ -4417,7 +4750,14 @@ class WorkbenchView extends ItemView {
       const head = row.createDiv({ cls: 'phdcc-file-row-head' });
       const heading = head.createDiv({ cls: 'phdcc-file-title', text: info.title });
       makeInteractive(heading, () => { void this.openFile(file); });
-      if (info.status) createBadge(head, info.status, badgeTone(info.status));
+      const controls = head.createDiv({ cls: 'phdcc-file-row-controls' });
+      if (info.status) createBadge(controls, info.status, badgeTone(info.status));
+      const menu = controls.createEl('details', { cls: 'phdcc-row-menu' });
+      menu.createEl('summary', { text: '⋯', attr: { title: '更多操作', 'aria-label': `${info.title} 更多操作` } });
+      const panel = menu.createDiv({ cls: 'phdcc-row-menu-panel' });
+      const open = panel.createEl('button', { cls: 'phdcc-row-action', text: '打开笔记', attr: { type: 'button' } });
+      open.addEventListener('click', () => { menu.removeAttribute('open'); void this.openFile(file); });
+      this.addTrashAction(panel, file, { title: info.title, recordId: info.recordId });
       row.createDiv({ cls: 'phdcc-file-meta', text: `${info.path} · ${info.date}` });
       if (info.nextAction) row.createDiv({ cls: 'phdcc-file-next', text: `下一步：${info.nextAction}` });
     });
@@ -4458,7 +4798,7 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
     this.refreshTimer = null;
     this.registerView(VIEW_TYPE, (leaf) => new WorkbenchView(leaf, this));
 
-    this.addRibbonIcon('layout-dashboard', '打开科研工作台', () => {
+    this.addRibbonIcon('microscope', '打开科研工作台', () => {
       void this.activateView();
     });
 
