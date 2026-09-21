@@ -2,7 +2,7 @@ const DB_FOLDER = '00-博士工作台/应用数据/数据库';
 const DB_FILE = `${DB_FOLDER}/records.json`;
 const AUDIT_FOLDER = '00-博士工作台/应用数据/审计';
 const AUDIT_FILE = `${AUDIT_FOLDER}/nmr-archive.jsonl`;
-const DATABASE_SCHEMA_VERSION = 4;
+const DATABASE_SCHEMA_VERSION = 3;
 const { validateEntityRecord } = require('./entities/identity');
 const MANAGED_FOLDERS = ['00-博士工作台', '实验记录', '文献', '文献阅读', 'DMAC_AIE_PET_调研'];
 
