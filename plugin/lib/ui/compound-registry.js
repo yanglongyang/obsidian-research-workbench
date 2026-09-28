@@ -126,8 +126,9 @@ function renderCompoundRegistry(view, compounds, options = {}) {
     makeInteractive(code, () => void view.openFile(compound.file));
     identity.createDiv({ cls: 'phdcc-record-id', text: compound.id });
     const characterizationLinks = Array.isArray(compound.characterizationLinks) ? compound.characterizationLinks : [];
+    const characterizationBox = identity.createDiv({ cls: 'phdcc-compound-characterization-box' });
     if (characterizationLinks.length) {
-      const summary = identity.createDiv({ cls: 'phdcc-compound-characterization-summary' });
+      const summary = characterizationBox.createDiv({ cls: 'phdcc-compound-characterization-summary' });
       const seen = new Set();
       characterizationLinks.forEach((link) => {
         const label = typeLabel(link.type);
@@ -135,6 +136,14 @@ function renderCompoundRegistry(view, compounds, options = {}) {
         seen.add(label);
         summary.createSpan({ cls: 'phdcc-compound-characterization-chip', text: `${label} ✓` });
       });
+    }
+    if (typeof view.openCompoundCharacterizationModal === 'function') {
+      const manage = characterizationBox.createEl('button', {
+        cls: 'phdcc-compound-characterization-manage',
+        text: characterizationLinks.length ? '管理表征' : '+ 关联表征',
+        attr: { type: 'button', title: '关联或管理外部表征文件' }
+      });
+      manage.addEventListener('click', () => view.openCompoundCharacterizationModal(compound));
     }
     const project = row.createDiv({ cls: `phdcc-compound-cell phdcc-compound-project${compound.project ? '' : ' is-muted'}`, text: compound.project || '未归属课题' });
     const molecularWeight = row.createDiv({ cls: `phdcc-compound-cell phdcc-compound-molecular-weight${compound.molecularWeight ? '' : ' is-muted'}`, text: compound.molecularWeight || '—' });
@@ -144,14 +153,6 @@ function renderCompoundRegistry(view, compounds, options = {}) {
     copy.addEventListener('click', () => void copySmiles(compound));
     const open = actions.createEl('button', { cls: 'phdcc-row-action', text: '打开', attr: { type: 'button' } });
     open.addEventListener('click', () => void view.openFile(compound.file));
-    if (typeof view.openCompoundCharacterizationModal === 'function') {
-      const characterization = actions.createEl('button', {
-        cls: 'phdcc-row-action',
-        text: characterizationLinks.length ? `表征 ${characterizationLinks.length}` : '关联表征',
-        attr: { type: 'button', title: '关联或管理外部表征文件' }
-      });
-      characterization.addEventListener('click', () => view.openCompoundCharacterizationModal(compound));
-    }
     if (compound.file && typeof view.addTrashAction === 'function') view.addTrashAction(actions, compound.file, { title: compound.title, recordId: compound.id });
   });
   if (!items.length) root.createDiv({ cls: 'phdcc-compound-placeholder', text: '暂无化合物记录' });
