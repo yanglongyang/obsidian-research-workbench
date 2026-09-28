@@ -1959,3 +1959,216 @@
     flex-wrap: wrap;
   }
 }
+
+
+/* Compound structure selection and external characterization links. */
+.phdcc-view .phdcc-compound-characterization-box {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.phdcc-view .phdcc-compound-characterization-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+}
+
+.phdcc-view .phdcc-compound-characterization-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 6px;
+  color: var(--phdcc-success);
+  background: var(--phdcc-success-soft);
+  border: 1px solid color-mix(in srgb, var(--phdcc-success) 16%, transparent);
+  border-radius: 5px;
+  font-size: var(--phdcc-font-xs);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.phdcc-view .phdcc-compound-characterization-manage {
+  padding: 2px 6px;
+  color: var(--phdcc-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  font-size: var(--phdcc-font-xs);
+  cursor: pointer;
+}
+
+.phdcc-view .phdcc-compound-characterization-manage:hover {
+  color: var(--phdcc-accent);
+  background: var(--phdcc-accent-soft);
+}
+
+.phdcc-view .phdcc-compound-placeholder.is-ambiguous {
+  gap: 5px;
+}
+
+.phdcc-view .phdcc-compound-choose-structure {
+  margin-top: 7px;
+}
+
+.phdcc-structure-picker-modal {
+  width: min(760px, 94vw);
+  max-width: 94vw;
+}
+
+.phdcc-structure-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.phdcc-structure-picker-card {
+  display: grid;
+  min-height: 190px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 10px;
+  color: var(--text-normal);
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.phdcc-structure-picker-card:hover {
+  background: var(--background-secondary);
+  border-color: var(--interactive-accent);
+}
+
+.phdcc-structure-picker-card img {
+  width: 100%;
+  height: 160px;
+  object-fit: contain;
+  background: white;
+  border-radius: 6px;
+}
+
+.phdcc-structure-picker-name {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.phdcc-characterization-modal {
+  width: min(680px, 94vw);
+  max-width: 94vw;
+}
+
+.phdcc-characterization-section-title {
+  margin: 18px 0 8px;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.phdcc-characterization-section-title.is-add {
+  padding-top: 4px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.phdcc-characterization-empty {
+  padding: 12px;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.phdcc-characterization-link-row,
+.phdcc-characterization-block-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.phdcc-characterization-link-copy,
+.phdcc-characterization-block-copy {
+  min-width: 0;
+}
+
+.phdcc-characterization-link-label,
+.phdcc-characterization-block-label {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.phdcc-characterization-link-path,
+.phdcc-characterization-block-path {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.phdcc-characterization-link-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.phdcc-characterization-add-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 8px 0 4px;
+}
+
+.phdcc-characterization-block {
+  margin: 8px 0 14px;
+  padding: 12px 14px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 9px;
+}
+
+.phdcc-characterization-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.phdcc-characterization-block-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.phdcc-characterization-manage {
+  flex: 0 0 auto;
+}
+
+.phdcc-characterization-block-list {
+  margin-top: 7px;
+}
+
+@media (max-width: 620px) {
+  .phdcc-structure-picker-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .phdcc-characterization-link-row,
+  .phdcc-characterization-block-row {
+    grid-template-columns: 1fr;
+  }
+
+  .phdcc-characterization-link-actions,
+  .phdcc-characterization-block-row > button {
+    justify-self: start;
+  }
+
+  .phdcc-characterization-block-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

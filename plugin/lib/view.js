@@ -27,6 +27,8 @@ const { MigrationModal } = require('./modals/migration-modal');
 const { NmrLedgerMigrationModal } = require('./modals/nmr-ledger-migration-modal');
 const { DeleteNoteModal } = require('./modals/delete-note-modal');
 const { CanvasCreateModal } = require('./modals/canvas-modal');
+const { CompoundCharacterizationModal } = require('./modals/compound-characterization-modal');
+const { CompoundStructureModal } = require('./modals/compound-structure-modal');
 const { projectRelations, unassignedExperiments, suggestProjectForExperiment, updateExperimentProject, batchAssignExperiments, upgradeLegacyExperimentAndAssign } = require('./entities/project-relations');
 const projectHubUi = require('./ui/project-hub');
 const unassignedUi = require('./ui/unassigned-experiments');
@@ -468,6 +470,22 @@ class WorkbenchView extends ItemView {
   async assignExperimentBatch(items, project) { const result = await batchAssignExperiments(this.app, items, project, { entityStore: this.entityStore }); await this.researchDatabase.refresh(); return result; }
   async upgradeLegacyExperiment(item, project) { const result = await upgradeLegacyExperimentAndAssign(this.app, item.file, project, { entityStore: this.entityStore }); await this.researchDatabase.refresh(); return result; }
   openCompoundModal() { new CompoundModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
+
+  openCompoundCharacterizationModal(compound) {
+    if (!compound?.file) return void new Notice('无法定位化合物笔记');
+    new CompoundCharacterizationModal(this.app, compound.file, {
+      links: compound.characterizationLinks,
+      onSaved: async () => { await this.refresh(); }
+    }).open();
+  }
+
+  openCompoundStructureModal(compound, candidates = []) {
+    if (!compound?.file) return void new Notice('无法定位化合物笔记');
+    new CompoundStructureModal(this.app, compound, candidates, {
+      onSelected: async () => { await this.refresh(); }
+    }).open();
+  }
+
   openDataAssetModal() { new DataAssetModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openMigrationModal() { new MigrationModal(this.app, this.plugin, { onCompleted: async () => { await this.refresh(); } }).open(); }
   openNmrLedgerMigrationModal() { new NmrLedgerMigrationModal(this.app, { onCompleted: async () => { await this.refresh(); } }).open(); }

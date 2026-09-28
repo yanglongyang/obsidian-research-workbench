@@ -7,6 +7,7 @@ const entries = [
   ['./lib/database', path.join(pluginDir, 'lib', 'database.js')],
   ['./lib/entities/project', path.join(pluginDir, 'lib', 'entities', 'project.js')],
   ['./lib/entities/compound', path.join(pluginDir, 'lib', 'entities', 'compound.js')],
+  ['./lib/entities/compound-characterization', path.join(pluginDir, 'lib', 'entities', 'compound-characterization.js')],
   ['./lib/entities/data-asset', path.join(pluginDir, 'lib', 'entities', 'data-asset.js')],
   ['./lib/entities/nmr-ledger', path.join(pluginDir, 'lib', 'entities', 'nmr-ledger.js')],
   ['./lib/entities/identity', path.join(pluginDir, 'lib', 'entities', 'identity.js')],
@@ -16,6 +17,7 @@ const entries = [
   ['./lib/ui/project-hub', path.join(pluginDir, 'lib', 'ui', 'project-hub.js')],
   ['./lib/ui/unassigned-experiments', path.join(pluginDir, 'lib', 'ui', 'unassigned-experiments.js')],
   ['./lib/ui/compound-registry', path.join(pluginDir, 'lib', 'ui', 'compound-registry.js')],
+  ['./lib/ui/compound-characterization-block', path.join(pluginDir, 'lib', 'ui', 'compound-characterization-block.js')],
   ['./lib/migrations/permanent-id', path.join(pluginDir, 'lib', 'migrations', 'permanent-id.js')],
   ['./lib/nmr', path.join(pluginDir, 'lib', 'nmr.js')],
   ['./lib/nmr-archive-modal', path.join(pluginDir, 'lib', 'nmr-archive-modal.js')],
@@ -33,6 +35,8 @@ const entries = [
   ['./lib/modals/nmr-ledger-migration-modal', path.join(pluginDir, 'lib', 'modals', 'nmr-ledger-migration-modal.js')],
   ['./lib/modals/delete-note-modal', path.join(pluginDir, 'lib', 'modals', 'delete-note-modal.js')],
   ['./lib/modals/canvas-modal', path.join(pluginDir, 'lib', 'modals', 'canvas-modal.js')],
+  ['./lib/modals/compound-characterization-modal', path.join(pluginDir, 'lib', 'modals', 'compound-characterization-modal.js')],
+  ['./lib/modals/compound-structure-modal', path.join(pluginDir, 'lib', 'modals', 'compound-structure-modal.js')],
   ['./lib/view', path.join(pluginDir, 'lib', 'view.js')],
   ['./main', path.join(pluginDir, 'main.src.js')]
 ];
@@ -62,6 +66,8 @@ function normalizeLocalRequires(id, source) {
       .replace("require('./modals/nmr-ledger-migration-modal')", "require('./lib/modals/nmr-ledger-migration-modal')")
       .replace("require('./modals/delete-note-modal')", "require('./lib/modals/delete-note-modal')")
       .replace("require('./modals/canvas-modal')", "require('./lib/modals/canvas-modal')")
+      .replace("require('./modals/compound-characterization-modal')", "require('./lib/modals/compound-characterization-modal')")
+      .replace("require('./modals/compound-structure-modal')", "require('./lib/modals/compound-structure-modal')")
       .replace("require('./ui/page-renderers')", "require('./lib/ui/page-renderers')");
   }
   if (id === './lib/ui/page-renderers') return source;
@@ -72,12 +78,14 @@ function normalizeLocalRequires(id, source) {
       .replace("require('./compound')", "require('./lib/entities/compound')")
       .replace("require('./data-asset')", "require('./lib/entities/data-asset')")
       .replace("require('./identity')", "require('./lib/entities/identity')")
+      .replace("require('./compound-characterization')", "require('./lib/entities/compound-characterization')")
       .replace("require('../data')", "require('./lib/data')");
   }
   if (id === './lib/entities/project-relations') return source.replace("require('./identity')", "require('./lib/entities/identity')").replace("require('../data')", "require('./lib/data')");
   if (id === './lib/ui/project-hub') return source.replace("require('../entities/project-relations')", "require('./lib/entities/project-relations')").replace("require('./compound-registry')", "require('./lib/ui/compound-registry')");
   if (id === './lib/ui/unassigned-experiments') return source.replace("require('../entities/project-relations')", "require('./lib/entities/project-relations')").replace("require('../entities/identity')", "require('./lib/entities/identity')");
-  if (id === './lib/ui/compound-registry') return source;
+  if (id === './lib/ui/compound-registry') return source.replace("require('../entities/compound-characterization')", "require('./lib/entities/compound-characterization')");
+  if (id === './lib/ui/compound-characterization-block') return source.replace("require('../entities/compound-characterization')", "require('./lib/entities/compound-characterization')").replace("require('../modals/compound-characterization-modal')", "require('./lib/modals/compound-characterization-modal')");
   if (id === './lib/migrations/permanent-id') {
     return source.replace("require('../database')", "require('./lib/database')");
   }
@@ -88,6 +96,9 @@ function normalizeLocalRequires(id, source) {
   if (id === './lib/modals/nmr-ledger-migration-modal') return source.replace("require('../entities/nmr-ledger')", "require('./lib/entities/nmr-ledger')");
   if (id === './lib/modals/delete-note-modal') return source;
   if (id === './lib/modals/canvas-modal') return source;
+  if (id === './lib/modals/compound-characterization-modal') return source.replace("require('../entities/compound-characterization')", "require('./lib/entities/compound-characterization')");
+  if (id === './lib/modals/compound-structure-modal') return source;
+  if (id === './lib/entities/compound-characterization') return source;
   if (id === './lib/nmr') return source.replace("require('./database')", "require('./lib/database')").replace("require('./entities/nmr-ledger')", "require('./lib/entities/nmr-ledger')").replace("require('./data')", "require('./lib/data')");
   if (id === './lib/entities/nmr-ledger') return source.replace("require('./data-asset')", "require('./lib/entities/data-asset')");
   if (id === './lib/settings') return source;
@@ -99,7 +110,8 @@ function normalizeLocalRequires(id, source) {
       .replace("require('./lib/view')", "require('./lib/view')")
       .replace("require('./lib/settings')", "require('./lib/settings')")
       .replace("require('./lib/database')", "require('./lib/database')")
-      .replace("require('./lib/quick-create-command')", "require('./lib/quick-create-command')");
+      .replace("require('./lib/quick-create-command')", "require('./lib/quick-create-command')")
+      .replace("require('./lib/ui/compound-characterization-block')", "require('./lib/ui/compound-characterization-block')");
   }
   return source;
 }

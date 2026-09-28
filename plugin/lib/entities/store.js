@@ -3,6 +3,7 @@ const { COMPOUND_FOLDER } = require('./compound');
 const { DATA_ASSET_FOLDER } = require('./data-asset');
 const { EXPERIMENT_FOLDERS } = require('../data');
 const { isPermanentEntityId, validateEntityRecord } = require('./identity');
+const { normalizeCharacterizationLinks } = require('./compound-characterization');
 
 function text(value) { return typeof value === 'string' ? value.trim() : ''; }
 function inFolder(file, folders) {
@@ -31,6 +32,7 @@ class EntityStore {
       compound: text(frontmatter.compound),
       compoundCode: text(frontmatter.compound_code),
       structurePreview: text(frontmatter.structure_preview),
+      characterizationLinks: normalizeCharacterizationLinks(frontmatter.characterization_links),
       smiles: text(frontmatter.smiles),
       formula: text(frontmatter.formula),
       molecularWeight: text(frontmatter.molecular_weight),

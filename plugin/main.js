@@ -764,6 +764,7 @@ function renderCompoundContent(compound) {
     `formula: ${yamlString(compound.formula)}`,
     `molecular_weight: ${yamlString(compound.molecularWeight)}`,
     `structure_preview: ${yamlString(compound.structurePreview)}`,
+    'characterization_links: []',
     `status: ${yamlString(compound.status || 'active')}`,
     `created: ${yamlString(compound.created)}`,
     `updated: ${yamlString(compound.updated)}`,
@@ -788,6 +789,9 @@ function renderCompoundContent(compound) {
     '',
     '## 表征',
     '',
+    '```research-characterization',
+    '```',
+    '',
     ''
   ].join('\n');
 }
@@ -800,6 +804,110 @@ async function createCompound(app, input, generateRecordId) {
   return app.vault.create(buildCompoundPath(app.vault, compoundCode), renderCompoundContent(compound));
 }
 module.exports = { COMPOUND_FOLDER, buildCompoundPath, renderCompoundContent, createCompound };
+
+},
+"./lib/entities/compound-characterization": function (module, exports, require) {
+const fs = require('fs/promises');
+const path = require('path');
+const { spawn } = require('child_process');
+
+const CHARACTERIZATION_BLOCK = 'research-characterization';
+const CHARACTERIZATION_TYPES = [
+  { value: '1h-nmr', label: '¹H NMR' },
+  { value: '13c-nmr', label: '¹³C NMR' },
+  { value: '2d-nmr', label: '2D NMR' },
+  { value: 'hrms', label: 'HRMS' },
+  { value: 'hplc', label: 'HPLC' },
+  { value: 'other', label: '其他' }
+];
+
+function typeLabel(type) {
+  return CHARACTERIZATION_TYPES.find((item) => item.value === String(type || '').trim())?.label || '其他';
+}
+
+function normalizeCharacterizationLinks(value) {
+  const input = Array.isArray(value) ? value : value ? [value] : [];
+  return input.map((item) => {
+    if (typeof item === 'string') {
+      const pathValue = item.trim();
+      return pathValue ? { type: 'other', label: '表征文件', path: pathValue } : null;
+    }
+    if (!item || typeof item !== 'object') return null;
+    const type = String(item.type || 'other').trim() || 'other';
+    const pathValue = String(item.path || '').trim();
+    if (!pathValue) return null;
+    return {
+      type,
+      label: String(item.label || typeLabel(type)).trim() || typeLabel(type),
+      path: pathValue
+    };
+  }).filter(Boolean);
+}
+
+function cleanExternalPath(value) {
+  const raw = String(value || '').trim();
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) return raw.slice(1, -1).trim();
+  return raw;
+}
+
+function isAbsoluteExternalPath(value) {
+  const target = cleanExternalPath(value);
+  return path.win32.isAbsolute(target) || path.posix.isAbsolute(target);
+}
+
+async function openExternalPath(value, platform = process.platform) {
+  const target = cleanExternalPath(value);
+  if (!target) throw new Error('未填写表征文件路径');
+  if (!isAbsoluteExternalPath(target)) throw new Error('表征路径必须是绝对路径');
+  await fs.access(target);
+  const command = platform === 'win32' ? 'explorer.exe' : platform === 'darwin' ? 'open' : 'xdg-open';
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, [target], { detached: true, stdio: 'ignore', windowsHide: platform === 'win32' });
+    child.once('error', reject);
+    child.once('spawn', () => { child.unref(); resolve(); });
+  });
+}
+
+async function ensureCharacterizationBlock(app, file) {
+  if (!file) throw new Error('化合物笔记不存在');
+  const content = await app.vault.read(file);
+  if (new RegExp('```' + CHARACTERIZATION_BLOCK + '(?:\\s|$)').test(content)) return false;
+  const block = '\n\n```' + CHARACTERIZATION_BLOCK + '\n```\n';
+  const heading = /^##\s*表征\s*$/m;
+  const match = heading.exec(content);
+  let updated = '';
+  if (match) {
+    const insertAt = match.index + match[0].length;
+    updated = content.slice(0, insertAt) + block + content.slice(insertAt).replace(/^\s*\n?/, '\n');
+  } else {
+    updated = content.replace(/\s*$/, '') + '\n\n## 表征' + block;
+  }
+  await app.vault.modify(file, updated);
+  return true;
+}
+
+async function setCharacterizationLinks(app, file, links) {
+  const normalized = normalizeCharacterizationLinks(links);
+  if (!app?.fileManager?.processFrontMatter) throw new Error('当前 Obsidian 版本不支持更新 frontmatter');
+  await app.fileManager.processFrontMatter(file, (frontmatter) => {
+    frontmatter.characterization_links = normalized.map((item) => ({ type: item.type, label: item.label, path: item.path }));
+    frontmatter.updated = new Date().toISOString();
+  });
+  await ensureCharacterizationBlock(app, file);
+  return normalized;
+}
+
+module.exports = {
+  CHARACTERIZATION_BLOCK,
+  CHARACTERIZATION_TYPES,
+  typeLabel,
+  normalizeCharacterizationLinks,
+  cleanExternalPath,
+  isAbsoluteExternalPath,
+  openExternalPath,
+  ensureCharacterizationBlock,
+  setCharacterizationLinks
+};
 
 },
 "./lib/entities/data-asset": function (module, exports, require) {
@@ -1091,6 +1199,7 @@ const { COMPOUND_FOLDER } = require('./lib/entities/compound');
 const { DATA_ASSET_FOLDER } = require('./lib/entities/data-asset');
 const { EXPERIMENT_FOLDERS } = require('./lib/data');
 const { isPermanentEntityId, validateEntityRecord } = require('./lib/entities/identity');
+const { normalizeCharacterizationLinks } = require('./lib/entities/compound-characterization');
 
 function text(value) { return typeof value === 'string' ? value.trim() : ''; }
 function inFolder(file, folders) {
@@ -1119,6 +1228,7 @@ class EntityStore {
       compound: text(frontmatter.compound),
       compoundCode: text(frontmatter.compound_code),
       structurePreview: text(frontmatter.structure_preview),
+      characterizationLinks: normalizeCharacterizationLinks(frontmatter.characterization_links),
       smiles: text(frontmatter.smiles),
       formula: text(frontmatter.formula),
       molecularWeight: text(frontmatter.molecular_weight),
@@ -1468,6 +1578,7 @@ module.exports = { renderUnassignedExperiments };
 },
 "./lib/ui/compound-registry": function (module, exports, require) {
 const { Notice } = require('obsidian');
+const { typeLabel } = require('./lib/entities/compound-characterization');
 
 function cleanLink(link) {
   return String(link || '').split('#')[0].split('|')[0].trim();
@@ -1555,7 +1666,13 @@ function renderStructureCell(view, row, compound, resolution) {
   }
   const text = resolution.status === 'ambiguous' ? '检测到多个结构式' : resolution.status === 'broken' ? '结构文件缺失' : '未添加结构式';
   const placeholder = cell.createDiv({ cls: `phdcc-compound-placeholder is-${resolution.status}`, text });
-  if (resolution.status === 'ambiguous') placeholder.createDiv({ cls: 'phdcc-compound-placeholder-detail', text: '请在 frontmatter 指定 structure_preview' });
+  if (resolution.status === 'ambiguous') {
+    placeholder.createDiv({ cls: 'phdcc-compound-placeholder-detail', text: '选择一个作为主结构式预览' });
+    if (typeof view.openCompoundStructureModal === 'function') {
+      const choose = placeholder.createEl('button', { cls: 'phdcc-row-action phdcc-compound-choose-structure', text: '选择主结构式', attr: { type: 'button' } });
+      choose.addEventListener('click', () => view.openCompoundStructureModal(compound, resolution.candidates));
+    }
+  }
 }
 
 function installPreviewListener(view) {
@@ -1587,6 +1704,26 @@ function renderCompoundRegistry(view, compounds, options = {}) {
     const code = identity.createDiv({ cls: 'phdcc-compound-code', text: compound.compoundCode || compound.title });
     makeInteractive(code, () => void view.openFile(compound.file));
     identity.createDiv({ cls: 'phdcc-record-id', text: compound.id });
+    const characterizationLinks = Array.isArray(compound.characterizationLinks) ? compound.characterizationLinks : [];
+    const characterizationBox = identity.createDiv({ cls: 'phdcc-compound-characterization-box' });
+    if (characterizationLinks.length) {
+      const summary = characterizationBox.createDiv({ cls: 'phdcc-compound-characterization-summary' });
+      const seen = new Set();
+      characterizationLinks.forEach((link) => {
+        const label = typeLabel(link.type);
+        if (seen.has(label)) return;
+        seen.add(label);
+        summary.createSpan({ cls: 'phdcc-compound-characterization-chip', text: `${label} ✓` });
+      });
+    }
+    if (typeof view.openCompoundCharacterizationModal === 'function') {
+      const manage = characterizationBox.createEl('button', {
+        cls: 'phdcc-compound-characterization-manage',
+        text: characterizationLinks.length ? '管理表征' : '+ 关联表征',
+        attr: { type: 'button', title: '关联或管理外部表征文件' }
+      });
+      manage.addEventListener('click', () => view.openCompoundCharacterizationModal(compound));
+    }
     const project = row.createDiv({ cls: `phdcc-compound-cell phdcc-compound-project${compound.project ? '' : ' is-muted'}`, text: compound.project || '未归属课题' });
     const molecularWeight = row.createDiv({ cls: `phdcc-compound-cell phdcc-compound-molecular-weight${compound.molecularWeight ? '' : ' is-muted'}`, text: compound.molecularWeight || '—' });
     const actions = row.createDiv({ cls: 'phdcc-compound-cell phdcc-compound-actions' });
@@ -1602,6 +1739,49 @@ function renderCompoundRegistry(view, compounds, options = {}) {
 }
 
 module.exports = { resolveCompoundStructure, naturalCompoundSort, countCompoundRelations, renderCompoundRegistry, resourcePath, copySmiles };
+
+},
+"./lib/ui/compound-characterization-block": function (module, exports, require) {
+const { Notice } = require('obsidian');
+const { normalizeCharacterizationLinks, openExternalPath } = require('./lib/entities/compound-characterization');
+const { CompoundCharacterizationModal } = require('./lib/modals/compound-characterization-modal');
+
+function renderCharacterizationBlock(plugin, sourcePath, container) {
+  const file = plugin.app.vault.getAbstractFileByPath(sourcePath);
+  if (!file) return void container.createDiv({ cls: 'phdcc-characterization-empty', text: '无法定位当前化合物笔记。' });
+  const frontmatter = plugin.app.metadataCache.getFileCache(file)?.frontmatter || {};
+  const links = normalizeCharacterizationLinks(frontmatter.characterization_links);
+  const root = container.createDiv({ cls: 'phdcc-characterization-block' });
+
+  const head = root.createDiv({ cls: 'phdcc-characterization-block-head' });
+  head.createDiv({ cls: 'phdcc-characterization-block-title', text: links.length ? `已关联表征 ${links.length} 项` : '尚未关联表征文件' });
+  const manage = head.createEl('button', { cls: 'phdcc-characterization-manage', text: links.length ? '管理关联' : '+ 关联表征文件', attr: { type: 'button' } });
+  manage.addEventListener('click', () => {
+    new CompoundCharacterizationModal(plugin.app, file, {
+      links,
+      onSaved: () => {
+        root.empty();
+        renderCharacterizationBlock(plugin, sourcePath, root);
+      }
+    }).open();
+  });
+
+  if (!links.length) return;
+  const list = root.createDiv({ cls: 'phdcc-characterization-block-list' });
+  links.forEach((link) => {
+    const row = list.createDiv({ cls: 'phdcc-characterization-block-row' });
+    const copy = row.createDiv({ cls: 'phdcc-characterization-block-copy' });
+    copy.createDiv({ cls: 'phdcc-characterization-block-label', text: link.label });
+    copy.createDiv({ cls: 'phdcc-characterization-block-path', text: link.path });
+    const open = row.createEl('button', { text: '打开', attr: { type: 'button' } });
+    open.addEventListener('click', async () => {
+      try { await openExternalPath(link.path); }
+      catch (error) { new Notice(error instanceof Error ? error.message : '无法打开表征文件'); }
+    });
+  });
+}
+
+module.exports = { renderCharacterizationBlock };
 
 },
 "./lib/migrations/permanent-id": function (module, exports, require) {
@@ -3510,6 +3690,193 @@ class CanvasCreateModal extends Modal {
 module.exports = { DEFAULT_CANVAS_FOLDER, CanvasCreateModal };
 
 },
+"./lib/modals/compound-characterization-modal": function (module, exports, require) {
+const { Modal, Notice, Setting } = require('obsidian');
+const {
+  CHARACTERIZATION_TYPES,
+  typeLabel,
+  normalizeCharacterizationLinks,
+  isAbsoluteExternalPath,
+  openExternalPath,
+  setCharacterizationLinks
+} = require('./lib/entities/compound-characterization');
+
+class CompoundCharacterizationModal extends Modal {
+  constructor(app, file, options = {}) {
+    super(app);
+    this.file = file;
+    this.options = options;
+    this.state = {
+      links: normalizeCharacterizationLinks(options.links),
+      type: '1h-nmr',
+      label: '¹H NMR',
+      path: '',
+      saving: false
+    };
+  }
+
+  onOpen() {
+    this.modalEl.addClass('phdcc-task-modal', 'phdcc-characterization-modal');
+    this.render();
+  }
+
+  render() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl('h2', { text: '关联表征文件' });
+    contentEl.createDiv({ cls: 'phdcc-modal-subtitle', text: '只保存外部文件或文件夹路径；不会扫描、复制或导入原始数据。' });
+
+    const current = contentEl.createDiv({ cls: 'phdcc-characterization-current' });
+    current.createDiv({ cls: 'phdcc-characterization-section-title', text: `已关联 ${this.state.links.length} 项` });
+    if (!this.state.links.length) {
+      current.createDiv({ cls: 'phdcc-characterization-empty', text: '暂未关联表征文件。' });
+    } else {
+      this.state.links.forEach((link, index) => {
+        const row = current.createDiv({ cls: 'phdcc-characterization-link-row' });
+        const copy = row.createDiv({ cls: 'phdcc-characterization-link-copy' });
+        copy.createDiv({ cls: 'phdcc-characterization-link-label', text: link.label || typeLabel(link.type) });
+        copy.createDiv({ cls: 'phdcc-characterization-link-path', text: link.path });
+        const actions = row.createDiv({ cls: 'phdcc-characterization-link-actions' });
+        const open = actions.createEl('button', { text: '打开', attr: { type: 'button' } });
+        open.addEventListener('click', async () => {
+          try { await openExternalPath(link.path); }
+          catch (error) { new Notice(error instanceof Error ? error.message : '无法打开表征文件'); }
+        });
+        const remove = actions.createEl('button', { text: '移除', cls: 'mod-warning', attr: { type: 'button' } });
+        remove.addEventListener('click', () => {
+          this.state.links.splice(index, 1);
+          this.render();
+        });
+      });
+    }
+
+    contentEl.createDiv({ cls: 'phdcc-characterization-section-title is-add', text: '新增关联' });
+
+    new Setting(contentEl).setName('类型').addDropdown((dropdown) => {
+      CHARACTERIZATION_TYPES.forEach((item) => dropdown.addOption(item.value, item.label));
+      dropdown.setValue(this.state.type);
+      dropdown.onChange((value) => {
+        const previousDefault = typeLabel(this.state.type);
+        this.state.type = value;
+        if (!this.state.label.trim() || this.state.label === previousDefault) this.state.label = typeLabel(value);
+        this.render();
+      });
+    });
+
+    new Setting(contentEl).setName('显示名称').addText((text) => {
+      text.setValue(this.state.label);
+      text.inputEl.placeholder = '例如：¹H NMR';
+      text.onChange((value) => { this.state.label = value; });
+    });
+
+    new Setting(contentEl).setName('文件或文件夹路径').setDesc('填写已经归档好的外部绝对路径').addText((text) => {
+      text.setValue(this.state.path);
+      text.inputEl.placeholder = '例如：E:\\核磁归档\\YLY-146\\1H';
+      text.onChange((value) => { this.state.path = value; });
+    });
+
+    const addRow = contentEl.createDiv({ cls: 'phdcc-characterization-add-row' });
+    const add = addRow.createEl('button', { text: '+ 添加到列表', attr: { type: 'button' } });
+    add.addEventListener('click', () => {
+      const externalPath = this.state.path.trim();
+      if (!externalPath) return void new Notice('请填写文件或文件夹路径');
+      if (!isAbsoluteExternalPath(externalPath)) return void new Notice('请输入绝对路径');
+      const type = this.state.type || 'other';
+      this.state.links.push({ type, label: this.state.label.trim() || typeLabel(type), path: externalPath });
+      this.state.path = '';
+      this.render();
+    });
+
+    const footer = contentEl.createDiv({ cls: 'modal-button-container' });
+    footer.createEl('button', { text: '取消', attr: { type: 'button' } }).addEventListener('click', () => this.close());
+    const save = footer.createEl('button', { text: '保存关联', cls: 'mod-cta', attr: { type: 'button' } });
+    save.addEventListener('click', async () => {
+      if (this.state.saving) return;
+      this.state.saving = true;
+      save.disabled = true;
+      try {
+        const links = await setCharacterizationLinks(this.app, this.file, this.state.links);
+        if (typeof this.options.onSaved === 'function') await this.options.onSaved(links);
+        this.close();
+        new Notice('表征关联已保存');
+      } catch (error) {
+        this.state.saving = false;
+        save.disabled = false;
+        new Notice(error instanceof Error ? error.message : '保存表征关联失败');
+      }
+    });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+module.exports = { CompoundCharacterizationModal };
+
+},
+"./lib/modals/compound-structure-modal": function (module, exports, require) {
+const { Modal, Notice } = require('obsidian');
+
+function resourcePath(app, file) {
+  if (typeof app?.vault?.getResourcePath === 'function') return app.vault.getResourcePath(file);
+  if (typeof app?.vault?.adapter?.getResourcePath === 'function') return app.vault.adapter.getResourcePath(file.path);
+  return file?.path || '';
+}
+
+class CompoundStructureModal extends Modal {
+  constructor(app, compound, candidates = [], options = {}) {
+    super(app);
+    this.compound = compound;
+    this.candidates = [...new Set(candidates || [])].filter(Boolean);
+    this.options = options;
+    this.saving = false;
+  }
+
+  onOpen() {
+    this.modalEl.addClass('phdcc-task-modal', 'phdcc-structure-picker-modal');
+    const { contentEl } = this;
+    contentEl.createEl('h2', { text: '选择主结构式' });
+    contentEl.createDiv({ cls: 'phdcc-modal-subtitle', text: '选择 Compound Registry 中用于预览的 ChemDraw 结构。其他结构不会被删除。' });
+    const grid = contentEl.createDiv({ cls: 'phdcc-structure-picker-grid' });
+    if (!this.candidates.length) grid.createDiv({ cls: 'phdcc-empty', text: '当前笔记中没有找到可选择的 ChemDraw 预览图。' });
+    this.candidates.forEach((candidate) => {
+      const file = this.app.vault.getAbstractFileByPath(candidate);
+      if (!file) return;
+      const card = grid.createEl('button', { cls: 'phdcc-structure-picker-card', attr: { type: 'button', title: candidate } });
+      const img = card.createEl('img', { attr: { alt: candidate } });
+      img.src = `${resourcePath(this.app, file)}${file.stat?.mtime ? `?mtime=${file.stat.mtime}` : ''}`;
+      card.createDiv({ cls: 'phdcc-structure-picker-name', text: file.name });
+      card.addEventListener('click', () => { void this.select(candidate, card); });
+    });
+    const footer = contentEl.createDiv({ cls: 'modal-button-container' });
+    footer.createEl('button', { text: '取消', attr: { type: 'button' } }).addEventListener('click', () => this.close());
+  }
+
+  async select(candidate, button) {
+    if (this.saving || !this.compound?.file) return;
+    this.saving = true;
+    button.disabled = true;
+    try {
+      if (!this.app?.fileManager?.processFrontMatter) throw new Error('当前 Obsidian 版本不支持更新 frontmatter');
+      await this.app.fileManager.processFrontMatter(this.compound.file, (frontmatter) => {
+        frontmatter.structure_preview = candidate;
+        frontmatter.updated = new Date().toISOString();
+      });
+      if (typeof this.options.onSelected === 'function') await this.options.onSelected(candidate);
+      this.close();
+      new Notice('主结构式已更新');
+    } catch (error) {
+      this.saving = false;
+      button.disabled = false;
+      new Notice(error instanceof Error ? error.message : '更新主结构式失败');
+    }
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+module.exports = { CompoundStructureModal };
+
+},
 "./lib/view": function (module, exports, require) {
 const { ItemView, Modal, Notice, Setting, setIcon } = require('obsidian');
 const {
@@ -3540,6 +3907,8 @@ const { MigrationModal } = require('./lib/modals/migration-modal');
 const { NmrLedgerMigrationModal } = require('./lib/modals/nmr-ledger-migration-modal');
 const { DeleteNoteModal } = require('./lib/modals/delete-note-modal');
 const { CanvasCreateModal } = require('./lib/modals/canvas-modal');
+const { CompoundCharacterizationModal } = require('./lib/modals/compound-characterization-modal');
+const { CompoundStructureModal } = require('./lib/modals/compound-structure-modal');
 const { projectRelations, unassignedExperiments, suggestProjectForExperiment, updateExperimentProject, batchAssignExperiments, upgradeLegacyExperimentAndAssign } = require('./lib/entities/project-relations');
 const projectHubUi = require('./lib/ui/project-hub');
 const unassignedUi = require('./lib/ui/unassigned-experiments');
@@ -3981,6 +4350,22 @@ class WorkbenchView extends ItemView {
   async assignExperimentBatch(items, project) { const result = await batchAssignExperiments(this.app, items, project, { entityStore: this.entityStore }); await this.researchDatabase.refresh(); return result; }
   async upgradeLegacyExperiment(item, project) { const result = await upgradeLegacyExperimentAndAssign(this.app, item.file, project, { entityStore: this.entityStore }); await this.researchDatabase.refresh(); return result; }
   openCompoundModal() { new CompoundModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
+
+  openCompoundCharacterizationModal(compound) {
+    if (!compound?.file) return void new Notice('无法定位化合物笔记');
+    new CompoundCharacterizationModal(this.app, compound.file, {
+      links: compound.characterizationLinks,
+      onSaved: async () => { await this.refresh(); }
+    }).open();
+  }
+
+  openCompoundStructureModal(compound, candidates = []) {
+    if (!compound?.file) return void new Notice('无法定位化合物笔记');
+    new CompoundStructureModal(this.app, compound, candidates, {
+      onSelected: async () => { await this.refresh(); }
+    }).open();
+  }
+
   openDataAssetModal() { new DataAssetModal(this.app, this.entityStore, { onCreated: async (file) => { await this.openFile(file); await this.refresh(); } }).open(); }
   openMigrationModal() { new MigrationModal(this.app, this.plugin, { onCompleted: async () => { await this.refresh(); } }).open(); }
   openNmrLedgerMigrationModal() { new NmrLedgerMigrationModal(this.app, { onCompleted: async () => { await this.refresh(); } }).open(); }
@@ -4790,6 +5175,7 @@ const { VIEW_TYPE, WorkbenchView } = require('./lib/view');
 const { mergeSettings, ResearchWorkbenchSettingTab } = require('./lib/settings');
 const { affectsManagedPath } = require('./lib/database');
 const { openQuickCreateCommand } = require('./lib/quick-create-command');
+const { renderCharacterizationBlock } = require('./lib/ui/compound-characterization-block');
 
 module.exports = class PhDCommandCenterPlugin extends Plugin {
   async onload() {
@@ -4815,6 +5201,10 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
     });
 
     this.addSettingTab(new ResearchWorkbenchSettingTab(this.app, this));
+
+    this.registerMarkdownCodeBlockProcessor('research-characterization', (_source, el, ctx) => {
+      renderCharacterizationBlock(this, ctx.sourcePath, el);
+    });
 
     const scheduleRefresh = (file, oldPath) => {
       const paths = [file?.path, typeof oldPath === 'string' ? oldPath : ''].filter(Boolean);

@@ -34,6 +34,7 @@ function renderCompoundContent(compound) {
     `formula: ${yamlString(compound.formula)}`,
     `molecular_weight: ${yamlString(compound.molecularWeight)}`,
     `structure_preview: ${yamlString(compound.structurePreview)}`,
+    'characterization_links: []',
     `status: ${yamlString(compound.status || 'active')}`,
     `created: ${yamlString(compound.created)}`,
     `updated: ${yamlString(compound.updated)}`,
@@ -57,6 +58,9 @@ function renderCompoundContent(compound) {
     '## 合成记录',
     '',
     '## 表征',
+    '',
+    '```research-characterization',
+    '```',
     '',
     ''
   ].join('\n');
