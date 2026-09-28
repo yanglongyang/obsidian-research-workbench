@@ -1,4 +1,5 @@
 const { Notice } = require('obsidian');
+const { typeLabel } = require('../entities/compound-characterization');
 
 function cleanLink(link) {
   return String(link || '').split('#')[0].split('|')[0].trim();
@@ -86,7 +87,13 @@ function renderStructureCell(view, row, compound, resolution) {
   }
   const text = resolution.status === 'ambiguous' ? '检测到多个结构式' : resolution.status === 'broken' ? '结构文件缺失' : '未添加结构式';
   const placeholder = cell.createDiv({ cls: `phdcc-compound-placeholder is-${resolution.status}`, text });
-  if (resolution.status === 'ambiguous') placeholder.createDiv({ cls: 'phdcc-compound-placeholder-detail', text: '请在 frontmatter 指定 structure_preview' });
+  if (resolution.status === 'ambiguous') {
+    placeholder.createDiv({ cls: 'phdcc-compound-placeholder-detail', text: '选择一个作为主结构式预览' });
+    if (typeof view.openCompoundStructureModal === 'function') {
+      const choose = placeholder.createEl('button', { cls: 'phdcc-row-action phdcc-compound-choose-structure', text: '选择主结构式', attr: { type: 'button' } });
+      choose.addEventListener('click', () => view.openCompoundStructureModal(compound, resolution.candidates));
+    }
+  }
 }
 
 function installPreviewListener(view) {
@@ -118,6 +125,17 @@ function renderCompoundRegistry(view, compounds, options = {}) {
     const code = identity.createDiv({ cls: 'phdcc-compound-code', text: compound.compoundCode || compound.title });
     makeInteractive(code, () => void view.openFile(compound.file));
     identity.createDiv({ cls: 'phdcc-record-id', text: compound.id });
+    const characterizationLinks = Array.isArray(compound.characterizationLinks) ? compound.characterizationLinks : [];
+    if (characterizationLinks.length) {
+      const summary = identity.createDiv({ cls: 'phdcc-compound-characterization-summary' });
+      const seen = new Set();
+      characterizationLinks.forEach((link) => {
+        const label = typeLabel(link.type);
+        if (seen.has(label)) return;
+        seen.add(label);
+        summary.createSpan({ cls: 'phdcc-compound-characterization-chip', text: `${label} ✓` });
+      });
+    }
     const project = row.createDiv({ cls: `phdcc-compound-cell phdcc-compound-project${compound.project ? '' : ' is-muted'}`, text: compound.project || '未归属课题' });
     const molecularWeight = row.createDiv({ cls: `phdcc-compound-cell phdcc-compound-molecular-weight${compound.molecularWeight ? '' : ' is-muted'}`, text: compound.molecularWeight || '—' });
     const actions = row.createDiv({ cls: 'phdcc-compound-cell phdcc-compound-actions' });
@@ -126,6 +144,14 @@ function renderCompoundRegistry(view, compounds, options = {}) {
     copy.addEventListener('click', () => void copySmiles(compound));
     const open = actions.createEl('button', { cls: 'phdcc-row-action', text: '打开', attr: { type: 'button' } });
     open.addEventListener('click', () => void view.openFile(compound.file));
+    if (typeof view.openCompoundCharacterizationModal === 'function') {
+      const characterization = actions.createEl('button', {
+        cls: 'phdcc-row-action',
+        text: characterizationLinks.length ? `表征 ${characterizationLinks.length}` : '关联表征',
+        attr: { type: 'button', title: '关联或管理外部表征文件' }
+      });
+      characterization.addEventListener('click', () => view.openCompoundCharacterizationModal(compound));
+    }
     if (compound.file && typeof view.addTrashAction === 'function') view.addTrashAction(actions, compound.file, { title: compound.title, recordId: compound.id });
   });
   if (!items.length) root.createDiv({ cls: 'phdcc-compound-placeholder', text: '暂无化合物记录' });
