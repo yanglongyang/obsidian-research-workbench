@@ -3,6 +3,7 @@ const { VIEW_TYPE, WorkbenchView } = require('./lib/view');
 const { mergeSettings, ResearchWorkbenchSettingTab } = require('./lib/settings');
 const { affectsManagedPath } = require('./lib/database');
 const { openQuickCreateCommand } = require('./lib/quick-create-command');
+const { renderCharacterizationBlock } = require('./lib/ui/compound-characterization-block');
 
 module.exports = class PhDCommandCenterPlugin extends Plugin {
   async onload() {
@@ -28,6 +29,10 @@ module.exports = class PhDCommandCenterPlugin extends Plugin {
     });
 
     this.addSettingTab(new ResearchWorkbenchSettingTab(this.app, this));
+
+    this.registerMarkdownCodeBlockProcessor('research-characterization', (_source, el, ctx) => {
+      renderCharacterizationBlock(this, ctx.sourcePath, el);
+    });
 
     const scheduleRefresh = (file, oldPath) => {
       const paths = [file?.path, typeof oldPath === 'string' ? oldPath : ''].filter(Boolean);
