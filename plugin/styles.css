@@ -1962,11 +1962,18 @@
 
 
 /* Compound structure selection and external characterization links. */
+.phdcc-view .phdcc-compound-characterization-box {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 .phdcc-view .phdcc-compound-characterization-summary {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 5px;
-  margin-top: 6px;
 }
 
 .phdcc-view .phdcc-compound-characterization-chip {
@@ -1981,6 +1988,21 @@
   font-size: var(--phdcc-font-xs);
   font-weight: 650;
   white-space: nowrap;
+}
+
+.phdcc-view .phdcc-compound-characterization-manage {
+  padding: 2px 6px;
+  color: var(--phdcc-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  font-size: var(--phdcc-font-xs);
+  cursor: pointer;
+}
+
+.phdcc-view .phdcc-compound-characterization-manage:hover {
+  color: var(--phdcc-accent);
+  background: var(--phdcc-accent-soft);
 }
 
 .phdcc-view .phdcc-compound-placeholder.is-ambiguous {
